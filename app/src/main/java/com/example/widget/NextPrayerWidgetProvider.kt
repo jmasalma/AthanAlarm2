@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
@@ -80,11 +81,14 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
                         }
                     }
 
+                    val isTomorrow = (nextPair == null)
                     if (nextPair == null) {
                         nextPair = PrayerType.FAJR to tomorrowResult.fajr
                     }
 
                     val (type, time) = nextPair
+                    val englishName = if (type == PrayerType.NEXT_FAJR) "Fajr" else type.englishName
+
                     val formattedTime = if (settings.is24HourFormat) {
                         "%02d:%02d".format(time.first, time.second)
                     } else {
@@ -97,11 +101,30 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
                         "%d:%02d %s".format(h, time.second, ampm)
                     }
 
+                    val targetCal = Calendar.getInstance().apply {
+                        if (isTomorrow) {
+                            add(Calendar.DAY_OF_MONTH, 1)
+                        }
+                        set(Calendar.HOUR_OF_DAY, time.first)
+                        set(Calendar.MINUTE, time.second)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                        if (before(now)) {
+                            add(Calendar.DAY_OF_MONTH, 1)
+                        }
+                    }
+
+                    val diffMillis = targetCal.timeInMillis - now.timeInMillis
+                    val baseElapsed = SystemClock.elapsedRealtime() + diffMillis.coerceAtLeast(0)
+
                     for (widgetId in appWidgetIds) {
                         val views = RemoteViews(context.packageName, R.layout.widget_next_prayer).apply {
-                            setTextViewText(R.id.widget_prayer_name, "${type.englishName} (${type.arabicName})")
+                            setTextViewText(R.id.widget_prayer_name, englishName)
                             setTextViewText(R.id.widget_prayer_time, formattedTime)
-                            setTextViewText(R.id.widget_city_name, settings.city.displayName)
+
+                            // Live countdown chronometer
+                            setChronometerCountDown(R.id.widget_countdown_chronometer, true)
+                            setChronometer(R.id.widget_countdown_chronometer, baseElapsed, null, true)
 
                             val openAppIntent = Intent(context, MainActivity::class.java)
                             val pendingIntent = PendingIntent.getActivity(

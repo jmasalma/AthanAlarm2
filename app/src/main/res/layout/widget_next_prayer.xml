@@ -5,57 +5,69 @@
     android:layout_height="match_parent"
     android:orientation="horizontal"
     android:background="@drawable/widget_background"
-    android:padding="12dp"
+    android:paddingStart="14dp"
+    android:paddingEnd="14dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
     android:gravity="center_vertical">
 
-    <ImageView
-        android:id="@+id/widget_icon"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:src="@mipmap/ic_launcher_round"
-        android:contentDescription="Athan Alarm Icon" />
-
+    <!-- Left side: Next Prayer Name (English) & Time -->
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:layout_marginStart="12dp"
-        android:orientation="vertical">
-
-        <TextView
-            android:id="@+id/widget_next_label"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Next Prayer"
-            android:textColor="#D4AF37"
-            android:textSize="11sp"
-            android:textStyle="bold" />
+        android:orientation="vertical"
+        android:gravity="center_vertical">
 
         <TextView
             android:id="@+id/widget_prayer_name"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Asr (العصر)"
-            android:textColor="#FFFFFF"
+            android:text="Asr"
+            android:textColor="#D4AF37"
             android:textSize="18sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end" />
 
         <TextView
-            android:id="@+id/widget_city_name"
+            android:id="@+id/widget_prayer_time"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Waterloo, Ontario"
-            android:textColor="#A2C4BC"
-            android:textSize="11sp" />
+            android:text="3:45 PM"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:layout_marginTop="2dp"
+            android:maxLines="1" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/widget_prayer_time"
+    <!-- Right side: Countdown -->
+    <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="3:45 PM"
-        android:textColor="#D4AF37"
-        android:textSize="22sp"
-        android:textStyle="bold" />
+        android:orientation="vertical"
+        android:gravity="end|center_vertical">
+
+        <TextView
+            android:id="@+id/widget_countdown_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="STARTS IN"
+            android:textColor="#88A2C4BC"
+            android:textSize="9sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.05" />
+
+        <Chronometer
+            android:id="@+id/widget_countdown_chronometer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#A2C4BC"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:countDown="true"
+            android:layout_marginTop="1dp" />
+    </LinearLayout>
 
 </LinearLayout>
