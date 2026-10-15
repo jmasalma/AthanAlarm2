@@ -1,0 +1,6 @@
+{
+  "name": "Athan Alarm",
+  "description": "Accurate Islamic prayer times, Adhan alarms, Qibla compass, Hijri calendar, and daily Athkar.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

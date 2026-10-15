@@ -1,0 +1,83 @@
+name: Android CI & Release
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release Android App
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+        cache: 'gradle'
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x ./gradlew
+
+    - name: Prepare Keystore for Release Signing
+      run: |
+        keytool -genkey -v -keystore my-upload-key.jks \
+          -storepass "${STORE_PASSWORD:-android}" \
+          -alias upload \
+          -keypass "${KEY_PASSWORD:-android}" \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=AthanAlarm,O=AthanAlarm,C=CA"
+      env:
+        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
+
+    - name: Build Release APK and AAB with Gradle
+      run: ./gradlew assembleRelease bundleRelease
+      env:
+        KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+        STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
+
+    - name: Organize Release Artifacts
+      run: |
+        mkdir -p release-artifacts
+        cp app/build/outputs/apk/release/app-release.apk release-artifacts/AthanAlarm2.apk
+        cp app/build/outputs/bundle/release/app-release.aab release-artifacts/AthanAlarm2.aab
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AthanAlarm2-APK
+        path: release-artifacts/AthanAlarm2.apk
+
+    - name: Upload AAB Bundle Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AthanAlarm2-AAB
+        path: release-artifacts/AthanAlarm2.aab
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          release-artifacts/AthanAlarm2.apk
+          release-artifacts/AthanAlarm2.aab
+        generate_release_notes: true
