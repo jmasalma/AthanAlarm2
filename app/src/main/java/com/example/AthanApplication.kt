@@ -18,6 +18,10 @@ class AthanApplication : Application() {
         super.onCreate()
         createNotificationChannels()
         scheduleInitialAlarms()
+        try {
+            com.example.widget.NextPrayerWidgetProvider.updateAllWidgets(applicationContext)
+            com.example.widget.PrayerScheduleWidgetProvider.updateAllWidgets(applicationContext)
+        } catch (_: Exception) {}
     }
 
     private fun createNotificationChannels() {

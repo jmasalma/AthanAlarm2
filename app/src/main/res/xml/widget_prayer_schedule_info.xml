@@ -4,6 +4,8 @@
     android:minHeight="180dp"
     android:targetCellWidth="3"
     android:targetCellHeight="3"
+    android:minResizeWidth="140dp"
+    android:minResizeHeight="140dp"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/widget_prayer_schedule"
     android:resizeMode="horizontal|vertical"
