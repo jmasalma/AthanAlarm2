@@ -60,8 +60,16 @@ jobs:
         KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
 
     - name: Build Release APK and AAB with Gradle
-      run: ./gradlew assembleRelease bundleRelease
+      run: |
+        TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name) || 'v1.0.2' }}"
+        CLEAN_VERSION="${TAG_NAME#v}"
+        echo "Building Release version: $CLEAN_VERSION (Build Code #${{ github.run_number }})"
+        ./gradlew assembleRelease bundleRelease \
+          -PappVersionName="$CLEAN_VERSION" \
+          -PappVersionCode="${{ github.run_number }}"
       env:
+        APP_VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name) || '1.0.2' }}
+        APP_VERSION_CODE: ${{ github.run_number }}
         KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
         STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
         KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}

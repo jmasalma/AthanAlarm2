@@ -1,10 +1,15 @@
 package com.example.ui.screens
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -170,14 +175,25 @@ fun SettingsScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column {
+                    val soundSubtitle = when {
+                        uiState.settings.athanSound == "chime" -> "Gentle Ding / Chime (Default)"
+                        uiState.settings.athanSound == "adhan" -> "Melodic Takbir Adhan (Built-in)"
+                        uiState.settings.athanSound == "system_notification" -> "System Notification Ding / Tone"
+                        uiState.settings.athanSound == "system_alarm" -> "System Alarm Ringtone"
+                        uiState.settings.athanSound.startsWith("content://") -> {
+                            try {
+                                RingtoneManager.getRingtone(context, Uri.parse(uiState.settings.athanSound))?.getTitle(context)
+                                    ?: "Custom System Sound"
+                            } catch (_: Exception) {
+                                "Custom System Sound"
+                            }
+                        }
+                        else -> "Gentle Ding / Chime (Default)"
+                    }
                     SettingsClickableItem(
                         icon = Icons.Default.MusicNote,
-                        title = "Athan Sound",
-                        subtitle = when (uiState.settings.athanSound) {
-                            "adhan" -> "Melodic Takbir Adhan (Built-in)"
-                            "chime" -> "Peaceful Resonant Chime"
-                            else -> "Default Device Alarm Ringtone"
-                        },
+                        title = "Athan / Alert Sound",
+                        subtitle = soundSubtitle,
                         onClick = { showSoundDialog = true }
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
@@ -339,14 +355,14 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Athan Alarm v2.0",
+                        text = "Athan Alarm v${com.example.BuildConfig.VERSION_NAME}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Built with Jetpack Compose & modern Android exact alarm architecture. Fully offline prayer calculation, home screen widgets, Qibla compass, and battery optimization protection.",
+                        text = "Build ${com.example.BuildConfig.VERSION_CODE} • Offline prayer calculations, home screen widgets, Qibla compass & background alarm reliability.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -636,6 +652,23 @@ fun AthanSoundDialog(
     var previewPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var playingSoundId by remember { mutableStateOf<String?>(null) }
 
+    val ringtonePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            }
+            if (uri != null) {
+                previewPlayer?.release()
+                onSelect(uri.toString())
+            }
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             previewPlayer?.release()
@@ -650,10 +683,15 @@ fun AthanSoundDialog(
         }
 
         try {
-            val uri: Uri = when (soundId) {
-                "chime" -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}")
-                "adhan" -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_adhan}")
-                else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            val uri: Uri = when {
+                soundId.startsWith("content://") || soundId.startsWith("file://") -> Uri.parse(soundId)
+                soundId == "chime" -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}")
+                soundId == "adhan" -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_adhan}")
+                soundId == "system_notification" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                soundId == "system_alarm" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                else -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}")
             }
             val mp = MediaPlayer().apply {
                 setAudioAttributes(
@@ -676,10 +714,22 @@ fun AthanSoundDialog(
         }
     }
 
-    val soundOptions = listOf(
+    val customSoundTitle = remember(currentSound) {
+        if (currentSound.startsWith("content://")) {
+            try {
+                RingtoneManager.getRingtone(context, Uri.parse(currentSound))?.getTitle(context)
+                    ?: "Selected Device Ringtone"
+            } catch (_: Exception) {
+                "Selected Device Ringtone"
+            }
+        } else null
+    }
+
+    val standardOptions = listOf(
+        "chime" to "Gentle Ding / Chime (Default)",
         "adhan" to "Melodic Takbir Adhan (Built-in)",
-        "chime" to "Peaceful Resonant Chime",
-        "system" to "Default Device Alarm Ringtone"
+        "system_notification" to "System Notification Sound (Ding/Ping)",
+        "system_alarm" to "System Alarm Ringtone"
     )
 
     AlertDialog(
@@ -687,10 +737,10 @@ fun AthanSoundDialog(
             previewPlayer?.release()
             onDismiss()
         },
-        title = { Text("Choose Athan Sound") },
+        title = { Text("Choose Alert Sound") },
         text = {
-            Column {
-                soundOptions.forEach { (id, label) ->
+            LazyColumn {
+                items(standardOptions) { (id, label) ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -729,6 +779,83 @@ fun AthanSoundDialog(
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                }
+
+                // If currently using a custom ringtone from the system picker
+                if (customSoundTitle != null) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    previewPlayer?.release()
+                                    onSelect(currentSound)
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                RadioButton(
+                                    selected = true,
+                                    onClick = {
+                                        previewPlayer?.release()
+                                        onSelect(currentSound)
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "System: $customSoundTitle",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            IconButton(onClick = { playPreview(currentSound) }) {
+                                Icon(
+                                    imageVector = if (playingSoundId == currentSound) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                    contentDescription = "Preview",
+                                    tint = GoldPrimary
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                    }
+                }
+
+                // Pick from System Notifications / Alarms button
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            previewPlayer?.release()
+                            val pickerIntent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                putExtra(
+                                    RingtoneManager.EXTRA_RINGTONE_TYPE,
+                                    RingtoneManager.TYPE_NOTIFICATION or RingtoneManager.TYPE_ALARM
+                                )
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select Notification or Alarm Sound")
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                if (currentSound.startsWith("content://")) {
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(currentSound))
+                                }
+                            }
+                            ringtonePickerLauncher.launch(pickerIntent)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Browse System Sounds & Alarms...")
+                    }
                 }
             }
         },

@@ -194,10 +194,10 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
         )
     }
 
-    fun toggleAlarmMode(context: Context, type: PrayerType) {
+    fun toggleAlarmMode(context: Context, type: PrayerType): AlarmMode {
+        val currentMode = _uiState.value.settings.alarmModes[type] ?: AlarmMode.ATHAN
+        val nextMode = currentMode.next()
         viewModelScope.launch {
-            val currentMode = _uiState.value.settings.alarmModes[type] ?: AlarmMode.ATHAN
-            val nextMode = currentMode.next()
             repository.updateAlarmMode(type, nextMode)
             val updatedSettings = _uiState.value.settings.copy(
                 alarmModes = _uiState.value.settings.alarmModes.toMutableMap().apply {
@@ -206,6 +206,7 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
             )
             AthanAlarmScheduler.scheduleNextAlarm(context, updatedSettings)
         }
+        return nextMode
     }
 
     fun setCity(context: Context, city: City) {

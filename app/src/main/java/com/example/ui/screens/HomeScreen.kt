@@ -82,6 +82,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import kotlinx.coroutines.delay
+import android.widget.Toast
+
 @Composable
 fun HomeScreen(
     uiState: AthanUiState,
@@ -92,17 +101,26 @@ fun HomeScreen(
     var showBatteryGuide by remember { mutableStateOf(false) }
     var showMonthlyTimetable by remember { mutableStateOf(false) }
     var editingOffsetPrayer by remember { mutableStateOf<PrayerType?>(null) }
+    var alertPopupMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(alertPopupMessage) {
+        if (alertPopupMessage != null) {
+            delay(2200L)
+            alertPopupMessage = null
+        }
+    }
 
     val todayGregorian = remember {
         SimpleDateFormat("EEEE, d MMMM yyyy", Locale.getDefault()).format(Date())
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("home_screen"),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("home_screen"),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
         // Clean Clean Header Card (No background graphic)
         item {
             Card(
@@ -350,7 +368,14 @@ fun HomeScreen(
                 is24h = uiState.settings.is24HourFormat,
                 onToggleAlarm = {
                     performHaptic(context)
-                    viewModel.toggleAlarmMode(context, if (prayer.type == PrayerType.NEXT_FAJR) PrayerType.FAJR else prayer.type)
+                    val targetType = if (prayer.type == PrayerType.NEXT_FAJR) PrayerType.FAJR else prayer.type
+                    val newMode = viewModel.toggleAlarmMode(context, targetType)
+                    alertPopupMessage = "${targetType.englishName}: ${newMode.title}"
+                    Toast.makeText(
+                        context,
+                        "${targetType.englishName} alert: ${newMode.title}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 },
                 onCardClick = {
                     editingOffsetPrayer = if (prayer.type == PrayerType.NEXT_FAJR) PrayerType.FAJR else prayer.type
@@ -409,6 +434,43 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(20.dp))
         }
     }
+
+    // Floating quick popup banner indicating alert mode change
+    AnimatedVisibility(
+        visible = alertPopupMessage != null,
+        enter = fadeIn() + slideInVertically(initialOffsetY = { 50 }),
+        exit = fadeOut() + slideOutVertically(targetOffsetY = { 50 }),
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 28.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.inverseSurface,
+            tonalElevation = 6.dp,
+            shadowElevation = 8.dp
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.NotificationsActive,
+                    contentDescription = null,
+                    tint = GoldPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = alertPopupMessage ?: "",
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+    }
+}
 
     // City Selection Dialog
     if (showCityDialog) {

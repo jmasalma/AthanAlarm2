@@ -78,7 +78,7 @@ class AthanAlarmReceiver : BroadcastReceiver() {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         val notification = NotificationCompat.Builder(context, PRE_ALERT_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification_athan)
             .setContentTitle("Approaching $prayerName Prayer")
             .setContentText("$prayerName starts in ~$preMinutes minutes. Prepare for Salah.")
             .setWhen(prayerTimeMillis)

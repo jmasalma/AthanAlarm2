@@ -103,15 +103,25 @@ class AthanAudioService : Service() {
             mediaPlayer?.release()
 
             val audioUri: Uri = when {
-                alarmMode == AlarmMode.BEEP || soundChoice == "chime" -> {
-                    Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
+                soundChoice.startsWith("content://") || soundChoice.startsWith("file://") -> {
+                    Uri.parse(soundChoice)
+                }
+                soundChoice == "system_notification" -> {
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                }
+                soundChoice == "system_alarm" -> {
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                 }
                 soundChoice == "adhan" -> {
                     Uri.parse("android.resource://$packageName/${R.raw.athan_adhan}")
                 }
+                soundChoice == "chime" || alarmMode == AlarmMode.BEEP -> {
+                    Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
+                }
                 else -> {
-                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
                 }
             }
 
@@ -260,7 +270,7 @@ class AthanAudioService : Service() {
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification_athan)
             .setContentTitle(title)
             .setContentText(content)
             .setPriority(NotificationCompat.PRIORITY_MAX)
