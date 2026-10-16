@@ -1,6 +1,0 @@
-{
-  "summary": "Updated implementation plan naming the dedicated repository AthanAlarm2-iOS, detailing the native SwiftUI + WidgetKit architecture and GitHub Actions workflow for generating sideloadable IPAs for AltStore/TrollStore.",
-  "updatedAt": "2026-10-16T09:39:39.116677725Z",
-  "requestFeedback": true,
-  "userFacing": true
-}

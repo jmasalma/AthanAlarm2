@@ -19,4 +19,4 @@ debug.keystore
 *.jks
 .build-outputs/
 release-artifacts/
-
+.aistudio/
