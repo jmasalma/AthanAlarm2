@@ -13,7 +13,12 @@ data class City(
     val timeZoneId: String = ""
 ) {
     val displayName: String
-        get() = "$name, $country"
+        get() = when {
+            country.isBlank() || country.equals("Custom", ignoreCase = true) || country.equals("Manual", ignoreCase = true) -> name
+            name.isBlank() -> country
+            name.startsWith("GPS (", ignoreCase = true) || name.startsWith("Custom (", ignoreCase = true) -> name
+            else -> "$name, $country"
+        }
 
     /**
      * Determines the effective UTC offset in hours for this city on a specific date,

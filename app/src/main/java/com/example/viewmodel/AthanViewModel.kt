@@ -222,9 +222,18 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
             _uiState.value = _uiState.value.copy(isLocating = true)
             val loc = LocationHelper.getCurrentLocation(context)
             if (loc != null) {
-                val matchedCity = LocationHelper.findClosestCity(loc.latitude, loc.longitude)
-                repository.updateCity(matchedCity)
-                val updated = _uiState.value.settings.copy(city = matchedCity)
+                val tzHours = java.util.TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
+                val gpsCity = City(
+                    name = String.format(java.util.Locale.US, "GPS (%.2f°, %.2f°)", loc.latitude, loc.longitude),
+                    country = "Custom",
+                    latitude = loc.latitude,
+                    longitude = loc.longitude,
+                    timezone = tzHours,
+                    elevation = if (loc.hasAltitude()) loc.altitude else 0.0,
+                    timeZoneId = java.util.TimeZone.getDefault().id
+                )
+                repository.updateCity(gpsCity)
+                val updated = _uiState.value.settings.copy(city = gpsCity)
                 AthanAlarmScheduler.scheduleNextAlarm(context, updated)
             }
             _uiState.value = _uiState.value.copy(isLocating = false)

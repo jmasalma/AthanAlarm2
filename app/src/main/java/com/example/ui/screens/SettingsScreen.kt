@@ -334,7 +334,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Important Note: Calculated prayer times are theoretical astronomical models based on celestial algorithms. Actual prayer and Iqamah times depend on your local mosque / community consensus. Always check your local masjid timetable.",
+                            text = "Important Note: Calculated prayer times are theoretical astronomical models based on celestial algorithms. Actual prayer and Iqamah times depend on your local masjid / community consensus. Always check your local masjid timetable.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 18.sp
@@ -362,7 +362,7 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Build ${com.example.BuildConfig.VERSION_CODE} • Offline prayer calculations, home screen widgets, Qibla compass & background alarm reliability.",
+                        text = "Keep us in your prayers and du'as.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

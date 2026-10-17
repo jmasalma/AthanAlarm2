@@ -67,12 +67,20 @@ fun CitySelectionDialog(
     var searchQuery by remember { mutableStateOf("") }
 
     // Manual coordinates state
-    var manualName by remember { mutableStateOf(currentCity.name) }
-    var manualCountry by remember { mutableStateOf(currentCity.country) }
-    var manualLat by remember { mutableStateOf(currentCity.latitude.toString()) }
-    var manualLon by remember { mutableStateOf(currentCity.longitude.toString()) }
-    var manualTz by remember { mutableStateOf(currentCity.timezone.toString()) }
-    var manualElev by remember { mutableStateOf(currentCity.elevation.toString()) }
+    val isPresetCity = City.CITIES.any { it.name.equals(currentCity.name, ignoreCase = true) && it.country.equals(currentCity.country, ignoreCase = true) }
+    var manualName by remember {
+        mutableStateOf(
+            if (isPresetCity) String.format(Locale.US, "Custom (%.2f°, %.2f°)", currentCity.latitude, currentCity.longitude)
+            else currentCity.name
+        )
+    }
+    var manualCountry by remember {
+        mutableStateOf(if (isPresetCity) "Custom" else currentCity.country)
+    }
+    var manualLat by remember { mutableStateOf(String.format(Locale.US, "%.5f", currentCity.latitude)) }
+    var manualLon by remember { mutableStateOf(String.format(Locale.US, "%.5f", currentCity.longitude)) }
+    var manualTz by remember { mutableStateOf(String.format(Locale.US, "%.1f", currentCity.timezone)) }
+    var manualElev by remember { mutableStateOf(currentCity.elevation.toInt().toString()) }
     var manualError by remember { mutableStateOf("") }
 
     val context = LocalContext.current
@@ -86,16 +94,17 @@ fun CitySelectionDialog(
             try {
                 val loc = LocationHelper.getCurrentLocation(context)
                 if (loc != null) {
-                    val closest = LocationHelper.findClosestCity(loc.latitude, loc.longitude)
-                    manualLat = String.format(Locale.US, "%.5f", loc.latitude)
-                    manualLon = String.format(Locale.US, "%.5f", loc.longitude)
+                    val latStr = String.format(Locale.US, "%.5f", loc.latitude)
+                    val lonStr = String.format(Locale.US, "%.5f", loc.longitude)
+                    manualLat = latStr
+                    manualLon = lonStr
                     if (loc.hasAltitude()) {
                         manualElev = loc.altitude.toInt().toString()
                     }
                     val tzHours = TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
                     manualTz = String.format(Locale.US, "%.1f", tzHours)
-                    manualName = closest.name
-                    manualCountry = closest.country
+                    manualName = String.format(Locale.US, "GPS (%.2f°, %.2f°)", loc.latitude, loc.longitude)
+                    manualCountry = "Custom"
                     manualError = ""
                 } else {
                     manualError = "Could not obtain GPS fix. Please ensure location services are turned on."
@@ -365,13 +374,26 @@ fun CitySelectionDialog(
                                         return@Button
                                     }
 
+                                    val resolvedName = when {
+                                        manualName.isBlank() || (isPresetCity && manualName == currentCity.name) -> {
+                                            String.format(Locale.US, "Custom (%.2f°, %.2f°)", lat, lon)
+                                        }
+                                        else -> manualName.trim()
+                                    }
+
+                                    val resolvedCountry = when {
+                                        manualCountry.isBlank() || (isPresetCity && manualCountry == currentCity.country) -> "Custom"
+                                        else -> manualCountry.trim()
+                                    }
+
                                     val custom = City(
-                                        name = manualName.ifBlank { "Custom Location" },
-                                        country = manualCountry.ifBlank { "Manual" },
+                                        name = resolvedName,
+                                        country = resolvedCountry,
                                         latitude = lat,
                                         longitude = lon,
                                         timezone = tz,
-                                        elevation = elev
+                                        elevation = elev,
+                                        timeZoneId = TimeZone.getDefault().id
                                     )
                                     onCitySelected(custom)
                                     onDismiss()
