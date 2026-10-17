@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release Tag version (e.g. v1.0.0). Leave as default to publish a release.'
+        description: 'Release Tag version (e.g. v1.0.6). Leave blank to auto-increment patch version.'
         required: false
-        default: 'v1.0.0'
+        default: ''
 
 permissions:
   contents: write
@@ -38,6 +38,38 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x ./gradlew
 
+    - name: Determine Release Tag
+      id: get_tag
+      run: |
+        if [[ "${{ github.ref }}" =~ ^refs/tags/ ]]; then
+          TAG="${{ github.ref_name }}"
+        elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.tag_name }}" ]]; then
+          TAG="${{ github.event.inputs.tag_name }}"
+        else
+          git fetch --tags --force
+          LATEST_TAG=$(git describe --tags --match "v[0-9]*" --abbrev=0 2>/dev/null || echo "v1.0.0")
+          echo "Latest tag found: $LATEST_TAG"
+          
+          # Strip 'v' prefix and parse semver
+          CLEAN_LATEST="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN_LATEST"
+          MAJOR=${MAJOR:-1}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+          
+          # Increment patch version (e.g., 1.0.5 -> 1.0.6)
+          NEW_PATCH=$((PATCH + 1))
+          TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+        fi
+        
+        CLEAN_VERSION="${TAG#v}"
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "clean_version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+        echo "=========================================="
+        echo "Resolved Release Tag: $TAG"
+        echo "Clean Version Name:   $CLEAN_VERSION"
+        echo "=========================================="
+
     - name: Prepare Keystore for Release Signing
       run: |
         if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
@@ -61,14 +93,12 @@ jobs:
 
     - name: Build Release APK and AAB with Gradle
       run: |
-        TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name) || 'v1.0.2' }}"
-        CLEAN_VERSION="${TAG_NAME#v}"
-        echo "Building Release version: $CLEAN_VERSION (Build Code #${{ github.run_number }})"
+        echo "Building Release version: ${{ steps.get_tag.outputs.clean_version }} (Build Code #${{ github.run_number }})"
         ./gradlew assembleRelease bundleRelease \
-          -PappVersionName="$CLEAN_VERSION" \
+          -PappVersionName="${{ steps.get_tag.outputs.clean_version }}" \
           -PappVersionCode="${{ github.run_number }}"
       env:
-        APP_VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name) || '1.0.2' }}
+        APP_VERSION_NAME: ${{ steps.get_tag.outputs.clean_version }}
         APP_VERSION_CODE: ${{ github.run_number }}
         KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
         STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
@@ -99,17 +129,17 @@ jobs:
         echo "Build succeeded! Artifacts are ready in the Actions 'Artifacts' section."
         echo "No GitHub Release was created for this commit push to '${{ github.ref_name }}'."
         echo "To publish an official GitHub Release:"
-        echo "  1. Run this workflow manually from GitHub Actions UI with a Tag (e.g. v1.0.0)"
-        echo "  2. OR push a Git tag: git tag v1.0.0 && git push origin v1.0.0"
+        echo "  1. Run this workflow manually from GitHub Actions UI (leave tag blank to auto-increment)"
+        echo "  2. OR push a Git tag: git tag v1.0.6 && git push origin v1.0.6"
         echo "  3. OR draft a release at https://github.com/${{ github.repository }}/releases/new"
         echo "=========================================================================="
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name != '')
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
       with:
-        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.tag_name }}
-        name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.tag_name }}
+        tag_name: ${{ steps.get_tag.outputs.tag }}
+        name: ${{ steps.get_tag.outputs.tag }}
         files: |
           release-artifacts/AthanAlarm2.apk
           release-artifacts/AthanAlarm2.aab
