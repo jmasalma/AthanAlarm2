@@ -262,12 +262,8 @@ class AthanAudioService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = "Hayya 'ala-Salah - ${prayerType.englishName} (${prayerType.arabicName})"
-        val content = if (alarmMode == AlarmMode.SILENT) {
-            "It is now time for ${prayerType.englishName} prayer."
-        } else {
-            "Athan is calling. Time for ${prayerType.englishName} prayer."
-        }
+        val title = prayerType.englishName
+        val content = "Time for ${prayerType.englishName}"
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification_athan)

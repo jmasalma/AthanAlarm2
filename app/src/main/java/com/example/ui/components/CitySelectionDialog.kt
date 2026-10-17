@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +25,7 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,14 +41,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.model.City
+import com.example.util.LocationHelper
+import kotlinx.coroutines.launch
+import java.util.Locale
+import java.util.TimeZone
 
 @Composable
 fun CitySelectionDialog(
@@ -63,6 +74,64 @@ fun CitySelectionDialog(
     var manualTz by remember { mutableStateOf(currentCity.timezone.toString()) }
     var manualElev by remember { mutableStateOf(currentCity.elevation.toString()) }
     var manualError by remember { mutableStateOf("") }
+
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var isDetectingGps by remember { mutableStateOf(false) }
+
+    fun startLocationFetch() {
+        isDetectingGps = true
+        manualError = ""
+        coroutineScope.launch {
+            try {
+                val loc = LocationHelper.getCurrentLocation(context)
+                if (loc != null) {
+                    val closest = LocationHelper.findClosestCity(loc.latitude, loc.longitude)
+                    manualLat = String.format(Locale.US, "%.5f", loc.latitude)
+                    manualLon = String.format(Locale.US, "%.5f", loc.longitude)
+                    if (loc.hasAltitude()) {
+                        manualElev = loc.altitude.toInt().toString()
+                    }
+                    val tzHours = TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
+                    manualTz = String.format(Locale.US, "%.1f", tzHours)
+                    manualName = closest.name
+                    manualCountry = closest.country
+                    manualError = ""
+                } else {
+                    manualError = "Could not obtain GPS fix. Please ensure location services are turned on."
+                }
+            } catch (e: Exception) {
+                manualError = "GPS detection error: ${e.message}"
+            } finally {
+                isDetectingGps = false
+            }
+        }
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (fineGranted || coarseGranted) {
+            startLocationFetch()
+        } else {
+            manualError = "Location permission is required to detect GPS coordinates."
+        }
+    }
+
+    fun detectGps() {
+        if (LocationHelper.hasLocationPermission(context)) {
+            startLocationFetch()
+        } else {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
 
     val filteredCities = remember(searchQuery) {
         if (searchQuery.isBlank()) {
@@ -101,27 +170,10 @@ fun CitySelectionDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 if (selectedTab == 0) {
-                    Button(
-                        onClick = {
-                            onUseGps()
-                            onDismiss()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("use_gps_button"),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.MyLocation, contentDescription = "Use GPS")
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Detect via GPS / Network")
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("Search city (e.g. Waterloo, Toronto)...") },
+                        placeholder = { Text("Search city...") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
@@ -185,10 +237,35 @@ fun CitySelectionDialog(
                     }
                 } else {
                     // Manual Lat / Long / Elevation Form
-                    LazyColumn(modifier = Modifier.height(300.dp)) {
+                    LazyColumn(modifier = Modifier.height(340.dp)) {
                         item {
+                            Button(
+                                onClick = { detectGps() },
+                                enabled = !isDetectingGps,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("detect_gps_button"),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                if (isDetectingGps) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Detecting coordinates...")
+                                } else {
+                                    Icon(Icons.Default.MyLocation, contentDescription = "Detect via GPS")
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Detect via GPS / Network")
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
                             Text(
-                                text = "Enter exact geographical coordinates and altitude for precision calculations.",
+                                text = "Or enter / adjust coordinates manually:",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
