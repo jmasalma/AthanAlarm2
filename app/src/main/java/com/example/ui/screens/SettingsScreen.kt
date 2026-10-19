@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -93,6 +94,7 @@ fun SettingsScreen(
     var showHijriOffsetDialog by remember { mutableStateOf(false) }
     var showBatteryGuide by remember { mutableStateOf(false) }
     var showPreAlertMinutesDialog by remember { mutableStateOf(false) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -368,11 +370,30 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        // Privacy Policy Item
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                SettingsClickableItem(
+                    icon = Icons.Default.Security,
+                    title = "Privacy Policy",
+                    subtitle = "100% on-device & offline. No data collected.",
+                    onClick = { showPrivacyDialog = true }
+                )
+            }
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
 
     // Dialogs
+    if (showPrivacyDialog) {
+        PrivacyPolicyDialog(onDismiss = { showPrivacyDialog = false })
+    }
     if (showCityDialog) {
         CitySelectionDialog(
             currentCity = uiState.settings.city,
@@ -957,6 +978,82 @@ fun PreAlertMinutesDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun PrivacyPolicyDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val privacyUrl = "https://jmasalma.github.io/AthanAlarm2/privacy.html"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = GoldPrimary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Privacy Policy")
+            }
+        },
+        text = {
+            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                item {
+                    Text(
+                        text = "100% On-Device & Offline Privacy",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Athan Alarm is engineered as a zero-data-collection, offline-first application. We do not require registration, we do not operate tracking servers, and we never collect, store, or sell your personal information.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Location & Permissions",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "• Location: Used exclusively on-device to calculate astronomical prayer times and Qibla direction. Your coordinates are never sent over the internet.\n• Notifications & Alarms: Used strictly to sound timely Athan alerts.\n• No Third-Party Trackers or Ads: No analytical tracking SDKs or ad networks are included.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    OutlinedButton(
+                        onClick = {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(privacyUrl))
+                                context.startActivity(intent)
+                            } catch (_: Exception) {}
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Public,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Open Full Policy Webpage")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
         }
     )
 }
