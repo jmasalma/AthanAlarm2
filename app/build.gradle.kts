@@ -20,7 +20,7 @@ android {
     ?: 2
 
   defaultConfig {
-    applicationId = "com.aistudio.athanalarm.jmqkzp"
+    applicationId = "com.masalma.athanalarm"
     minSdk = 24
     targetSdk = 36
     versionCode = appVersionCode
