@@ -43,7 +43,7 @@ data class AppSettings(
         PrayerType.ISHA to 0
     ),
     val athanSound: String = "chime", // "chime" (default ding/ping), "adhan", "system_notification", "system_alarm", or ringtone URI
-    val prePrayerReminderEnabled: Boolean = true,
+    val prePrayerReminderEnabled: Boolean = false,
     val prePrayerReminderMinutes: Int = 20,
     val hijriDayOffset: Int = 0
 )
@@ -93,7 +93,7 @@ class AppSettingsRepository(private val context: Context) {
 
         val is24 = pref[PreferencesKeys.IS_24_HOUR] ?: false
         val sound = pref[PreferencesKeys.ATHAN_SOUND] ?: "chime"
-        val preReminder = pref[PreferencesKeys.PRE_REMINDER_ENABLED] ?: true
+        val preReminder = pref[PreferencesKeys.PRE_REMINDER_ENABLED] ?: false
         val preMinutes = pref[PreferencesKeys.PRE_REMINDER_MINUTES] ?: 20
         val hijriOffset = pref[PreferencesKeys.HIJRI_DAY_OFFSET] ?: 0
 

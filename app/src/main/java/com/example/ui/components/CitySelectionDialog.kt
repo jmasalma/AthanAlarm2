@@ -68,14 +68,13 @@ fun CitySelectionDialog(
 
     // Manual coordinates state
     val isPresetCity = City.CITIES.any { it.name.equals(currentCity.name, ignoreCase = true) && it.country.equals(currentCity.country, ignoreCase = true) }
+    val initialNickname = if (!isPresetCity && !currentCity.name.startsWith("GPS (") && !currentCity.name.startsWith("Custom (")) currentCity.name else ""
+    var locationNickname by remember { mutableStateOf(initialNickname) }
     var manualName by remember {
         mutableStateOf(
             if (isPresetCity) String.format(Locale.US, "Custom (%.2f°, %.2f°)", currentCity.latitude, currentCity.longitude)
             else currentCity.name
         )
-    }
-    var manualCountry by remember {
-        mutableStateOf(if (isPresetCity) "Custom" else currentCity.country)
     }
     var manualLat by remember { mutableStateOf(String.format(Locale.US, "%.5f", currentCity.latitude)) }
     var manualLon by remember { mutableStateOf(String.format(Locale.US, "%.5f", currentCity.longitude)) }
@@ -104,7 +103,6 @@ fun CitySelectionDialog(
                     val tzHours = TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
                     manualTz = String.format(Locale.US, "%.1f", tzHours)
                     manualName = String.format(Locale.US, "GPS (%.2f°, %.2f°)", loc.latitude, loc.longitude)
-                    manualCountry = "Custom"
                     manualError = ""
                 } else {
                     manualError = "Could not obtain GPS fix. Please ensure location services are turned on."
@@ -140,6 +138,47 @@ fun CitySelectionDialog(
                 )
             )
         }
+    }
+
+    fun applyCustomLocation() {
+        val lat = manualLat.toDoubleOrNull()
+        val lon = manualLon.toDoubleOrNull()
+        val tz = manualTz.toDoubleOrNull()
+        val elev = manualElev.toDoubleOrNull() ?: 0.0
+
+        if (lat == null || lat !in -90.0..90.0) {
+            manualError = "Please enter valid latitude between -90 and 90"
+            return
+        }
+        if (lon == null || lon !in -180.0..180.0) {
+            manualError = "Please enter valid longitude between -180 and 180"
+            return
+        }
+        if (tz == null || tz !in -12.0..14.0) {
+            manualError = "Please enter valid timezone between -12 and +14"
+            return
+        }
+
+        val defaultGpsLabel = String.format(Locale.US, "GPS (%.2f°, %.2f°)", lat, lon)
+        val resolvedName = when {
+            locationNickname.isNotBlank() -> locationNickname.trim()
+            manualName.isNotBlank() && !manualName.startsWith("GPS (") && !manualName.startsWith("Custom (") && !(isPresetCity && manualName == currentCity.name) -> {
+                manualName.trim()
+            }
+            else -> defaultGpsLabel
+        }
+
+        val custom = City(
+            name = resolvedName,
+            country = "Custom",
+            latitude = lat,
+            longitude = lon,
+            timezone = tz,
+            elevation = elev,
+            timeZoneId = TimeZone.getDefault().id
+        )
+        onCitySelected(custom)
+        onDismiss()
     }
 
     val filteredCities = remember(searchQuery) {
@@ -281,21 +320,16 @@ fun CitySelectionDialog(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             OutlinedTextField(
-                                value = manualName,
-                                onValueChange = { manualName = it },
-                                label = { Text("City / Location Name") },
+                                value = locationNickname,
+                                onValueChange = { locationNickname = it },
+                                label = { Text("Location Nickname (Optional)") },
+                                placeholder = { Text(if (manualName.isNotBlank()) manualName else "e.g. Home, Work, My Masjid") },
+                                leadingIcon = { Icon(Icons.Default.EditLocation, contentDescription = null) },
+                                supportingText = { Text("Display name instead of GPS coordinates (e.g. Home, Office)") },
                                 singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            OutlinedTextField(
-                                value = manualCountry,
-                                onValueChange = { manualCountry = it },
-                                label = { Text("Country / Province / State") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("location_nickname_input"),
                                 shape = RoundedCornerShape(10.dp)
                             )
                             Spacer(modifier = Modifier.height(8.dp))
@@ -351,66 +385,29 @@ fun CitySelectionDialog(
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            Button(
-                                onClick = {
-                                    val lat = manualLat.toDoubleOrNull()
-                                    val lon = manualLon.toDoubleOrNull()
-                                    val tz = manualTz.toDoubleOrNull()
-                                    val elev = manualElev.toDoubleOrNull() ?: 0.0
-
-                                    if (lat == null || lat !in -90.0..90.0) {
-                                        manualError = "Please enter valid latitude between -90 and 90"
-                                        return@Button
-                                    }
-                                    if (lon == null || lon !in -180.0..180.0) {
-                                        manualError = "Please enter valid longitude between -180 and 180"
-                                        return@Button
-                                    }
-                                    if (tz == null || tz !in -12.0..14.0) {
-                                        manualError = "Please enter valid timezone between -12 and +14"
-                                        return@Button
-                                    }
-
-                                    val resolvedName = when {
-                                        manualName.isBlank() || (isPresetCity && manualName == currentCity.name) -> {
-                                            String.format(Locale.US, "Custom (%.2f°, %.2f°)", lat, lon)
-                                        }
-                                        else -> manualName.trim()
-                                    }
-
-                                    val resolvedCountry = when {
-                                        manualCountry.isBlank() || (isPresetCity && manualCountry == currentCity.country) -> "Custom"
-                                        else -> manualCountry.trim()
-                                    }
-
-                                    val custom = City(
-                                        name = resolvedName,
-                                        country = resolvedCountry,
-                                        latitude = lat,
-                                        longitude = lon,
-                                        timezone = tz,
-                                        elevation = elev,
-                                        timeZoneId = TimeZone.getDefault().id
-                                    )
-                                    onCitySelected(custom)
-                                    onDismiss()
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Apply Custom Location")
-                            }
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (selectedTab == 1) {
+                    Button(
+                        onClick = { applyCustomLocation() },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("apply_custom_location_button")
+                    ) {
+                        Text("Apply Custom Location")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
             }
         }
     )
