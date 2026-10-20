@@ -402,7 +402,7 @@ fun CitySelectionDialog(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.testTag("apply_custom_location_button")
                     ) {
-                        Text("Apply Custom Location")
+                        Text("Apply")
                     }
                 }
                 TextButton(onClick = onDismiss) {
