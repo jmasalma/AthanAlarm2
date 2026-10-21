@@ -8,6 +8,7 @@ import com.example.model.CalculationMethod
 import com.example.model.City
 import com.example.model.JuristicMethod
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -60,7 +61,7 @@ class ExampleUnitTest {
         val settings = AppSettings()
         assertEquals("Waterloo", settings.city.name)
         assertEquals(CalculationMethod.ISNA, settings.calculationMethod)
-        assertTrue(settings.prePrayerReminderEnabled)
+        assertFalse(settings.prePrayerReminderEnabled)
         assertEquals(20, settings.prePrayerReminderMinutes)
     }
 

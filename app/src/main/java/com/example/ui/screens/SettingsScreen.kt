@@ -8,8 +8,13 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
+import java.io.FileInputStream
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -42,6 +47,7 @@ import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -179,15 +185,35 @@ fun SettingsScreen(
                 Column {
                     val soundSubtitle = when {
                         uiState.settings.athanSound == "chime" -> "Gentle Ding / Chime (Default)"
-                        uiState.settings.athanSound == "adhan" -> "Melodic Takbir Adhan (Built-in)"
-                        uiState.settings.athanSound == "system_notification" -> "System Notification Ding / Tone"
+                        uiState.settings.athanSound == "adhan" || uiState.settings.athanSound == "athan" -> "Athan"
+                        uiState.settings.athanSound == "system_notification" -> "System Notification Sound"
                         uiState.settings.athanSound == "system_alarm" -> "System Alarm Ringtone"
+                        uiState.settings.athanSound.startsWith("custom_file:") -> {
+                            val path = uiState.settings.athanSound.removePrefix("custom_file:")
+                            val rawName = File(path).name
+                            val originalName = if (rawName.startsWith("custom_") && rawName.indexOf('_', 7) != -1) {
+                                rawName.substring(rawName.indexOf('_', 7) + 1)
+                            } else {
+                                rawName
+                            }
+                            "Custom MP3: $originalName"
+                        }
+                        uiState.settings.athanSound.startsWith("file://") -> {
+                            val path = Uri.parse(uiState.settings.athanSound).path ?: ""
+                            val rawName = File(path).name
+                            val originalName = if (rawName.startsWith("custom_") && rawName.indexOf('_', 7) != -1) {
+                                rawName.substring(rawName.indexOf('_', 7) + 1)
+                            } else {
+                                rawName
+                            }
+                            "Custom MP3: $originalName"
+                        }
                         uiState.settings.athanSound.startsWith("content://") -> {
                             try {
-                                RingtoneManager.getRingtone(context, Uri.parse(uiState.settings.athanSound))?.getTitle(context)
-                                    ?: "Custom System Sound"
+                                val title = RingtoneManager.getRingtone(context, Uri.parse(uiState.settings.athanSound))?.getTitle(context)
+                                if (!title.isNullOrBlank()) "System: $title" else "Custom Audio"
                             } catch (_: Exception) {
-                                "Custom System Sound"
+                                "Custom Audio"
                             }
                         }
                         else -> "Gentle Ding / Chime (Default)"
@@ -663,6 +689,37 @@ fun HighLatRuleDialog(
     )
 }
 
+private fun saveCustomAudioUri(context: Context, sourceUri: Uri): String? {
+    return try {
+        val contentResolver = context.contentResolver
+        var fileName = "custom_athan.mp3"
+        contentResolver.query(sourceUri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIndex != -1 && cursor.moveToFirst()) {
+                val name = cursor.getString(nameIndex)
+                if (!name.isNullOrBlank()) {
+                    fileName = name
+                }
+            }
+        }
+        val safeFileName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val soundsDir = File(context.filesDir, "custom_sounds")
+        if (!soundsDir.exists()) {
+            soundsDir.mkdirs()
+        }
+        val targetFile = File(soundsDir, "custom_${System.currentTimeMillis()}_$safeFileName")
+        contentResolver.openInputStream(sourceUri)?.use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        "custom_file:${targetFile.absolutePath}"
+    } catch (e: Exception) {
+        Log.e("SettingsScreen", "Error saving custom audio: ${e.message}", e)
+        null
+    }
+}
+
 @Composable
 fun AthanSoundDialog(
     currentSound: String,
@@ -672,6 +729,22 @@ fun AthanSoundDialog(
     val context = LocalContext.current
     var previewPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var playingSoundId by remember { mutableStateOf<String?>(null) }
+
+    // Direct audio/MP3 file picker to avoid "Unable to add custom ringtone" system error
+    val audioFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val saved = saveCustomAudioUri(context, uri)
+            if (saved != null) {
+                previewPlayer?.release()
+                onSelect(saved)
+                Toast.makeText(context, "Custom audio file added", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Could not load selected audio file", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     val ringtonePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -685,7 +758,12 @@ fun AthanSoundDialog(
             }
             if (uri != null) {
                 previewPlayer?.release()
-                onSelect(uri.toString())
+                val saved = saveCustomAudioUri(context, uri)
+                if (saved != null) {
+                    onSelect(saved)
+                } else {
+                    onSelect(uri.toString())
+                }
             }
         }
     }
@@ -698,22 +776,12 @@ fun AthanSoundDialog(
 
     fun playPreview(soundId: String) {
         previewPlayer?.release()
-        if (playingSoundId == soundId) {
+        if (playingSoundId == soundId || (soundId == "athan" && playingSoundId == "adhan")) {
             playingSoundId = null
             return
         }
 
         try {
-            val uri: Uri = when {
-                soundId.startsWith("content://") || soundId.startsWith("file://") -> Uri.parse(soundId)
-                soundId == "chime" -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}")
-                soundId == "adhan" -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_adhan}")
-                soundId == "system_notification" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                soundId == "system_alarm" -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                else -> Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}")
-            }
             val mp = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
@@ -721,13 +789,59 @@ fun AthanSoundDialog(
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
                 )
-                setDataSource(context, uri)
                 setOnCompletionListener {
                     playingSoundId = null
                 }
-                prepare()
-                start()
+                setOnErrorListener { _, _, _ ->
+                    playingSoundId = null
+                    true
+                }
             }
+
+            when {
+                soundId.startsWith("custom_file:") -> {
+                    val file = File(soundId.removePrefix("custom_file:"))
+                    if (file.exists()) {
+                        FileInputStream(file).use { fis ->
+                            mp.setDataSource(fis.fd)
+                        }
+                    } else return
+                }
+                soundId.startsWith("file://") -> {
+                    val path = Uri.parse(soundId).path ?: ""
+                    val file = File(path)
+                    if (file.exists()) {
+                        FileInputStream(file).use { fis ->
+                            mp.setDataSource(fis.fd)
+                        }
+                    } else return
+                }
+                soundId.startsWith("content://") -> {
+                    mp.setDataSource(context, Uri.parse(soundId))
+                }
+                soundId == "chime" -> {
+                    mp.setDataSource(context, Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}"))
+                }
+                soundId == "adhan" || soundId == "athan" -> {
+                    mp.setDataSource(context, Uri.parse("android.resource://${context.packageName}/${R.raw.athan_general}"))
+                }
+                soundId == "system_notification" -> {
+                    val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    if (uri != null) mp.setDataSource(context, uri) else return
+                }
+                soundId == "system_alarm" -> {
+                    val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    if (uri != null) mp.setDataSource(context, uri) else return
+                }
+                else -> {
+                    mp.setDataSource(context, Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}"))
+                }
+            }
+
+            mp.prepare()
+            mp.start()
             previewPlayer = mp
             playingSoundId = soundId
         } catch (_: Exception) {
@@ -735,11 +849,28 @@ fun AthanSoundDialog(
         }
     }
 
+    val customFileTitle = remember(currentSound) {
+        if (currentSound.startsWith("custom_file:") || currentSound.startsWith("file://")) {
+            val path = if (currentSound.startsWith("custom_file:")) {
+                currentSound.removePrefix("custom_file:")
+            } else {
+                Uri.parse(currentSound).path ?: ""
+            }
+            val rawName = File(path).name
+            val originalName = if (rawName.startsWith("custom_") && rawName.indexOf('_', 7) != -1) {
+                rawName.substring(rawName.indexOf('_', 7) + 1)
+            } else {
+                rawName
+            }
+            originalName.ifBlank { "Custom Audio" }
+        } else null
+    }
+
     val customSoundTitle = remember(currentSound) {
         if (currentSound.startsWith("content://")) {
             try {
-                RingtoneManager.getRingtone(context, Uri.parse(currentSound))?.getTitle(context)
-                    ?: "Selected Device Ringtone"
+                val title = RingtoneManager.getRingtone(context, Uri.parse(currentSound))?.getTitle(context)
+                if (!title.isNullOrBlank()) title else "Selected Device Ringtone"
             } catch (_: Exception) {
                 "Selected Device Ringtone"
             }
@@ -748,7 +879,7 @@ fun AthanSoundDialog(
 
     val standardOptions = listOf(
         "chime" to "Gentle Ding / Chime (Default)",
-        "adhan" to "Melodic Takbir Adhan (Built-in)",
+        "athan" to "Athan",
         "system_notification" to "System Notification Sound (Ding/Ping)",
         "system_alarm" to "System Alarm Ringtone"
     )
@@ -762,6 +893,12 @@ fun AthanSoundDialog(
         text = {
             LazyColumn {
                 items(standardOptions) { (id, label) ->
+                    val isSelected = if (id == "athan") {
+                        currentSound == "athan" || currentSound == "adhan"
+                    } else {
+                        currentSound == id
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -778,7 +915,7 @@ fun AthanSoundDialog(
                             modifier = Modifier.weight(1f)
                         ) {
                             RadioButton(
-                                selected = id == currentSound,
+                                selected = isSelected,
                                 onClick = {
                                     previewPlayer?.release()
                                     onSelect(id)
@@ -787,19 +924,68 @@ fun AthanSoundDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = label,
-                                fontWeight = if (id == currentSound) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             )
                         }
 
                         IconButton(onClick = { playPreview(id) }) {
                             Icon(
-                                imageVector = if (playingSoundId == id) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                imageVector = if (playingSoundId == id || (id == "athan" && playingSoundId == "adhan")) {
+                                    Icons.Default.Stop
+                                } else {
+                                    Icons.Default.PlayArrow
+                                },
                                 contentDescription = "Preview",
                                 tint = GoldPrimary
                             )
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                }
+
+                // If currently using a custom imported file
+                if (customFileTitle != null) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    previewPlayer?.release()
+                                    onSelect(currentSound)
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                RadioButton(
+                                    selected = true,
+                                    onClick = {
+                                        previewPlayer?.release()
+                                        onSelect(currentSound)
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Custom MP3: $customFileTitle",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            IconButton(onClick = { playPreview(currentSound) }) {
+                                Icon(
+                                    imageVector = if (playingSoundId == currentSound) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                    contentDescription = "Preview",
+                                    tint = GoldPrimary
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                    }
                 }
 
                 // If currently using a custom ringtone from the system picker
@@ -847,9 +1033,31 @@ fun AthanSoundDialog(
                     }
                 }
 
-                // Pick from System Notifications / Alarms button
+                // Add Custom MP3 / Audio File button
                 item {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            previewPlayer?.release()
+                            audioFilePickerLauncher.launch("audio/*")
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("select_custom_mp3_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Add Custom MP3 / Audio File...")
+                    }
+                }
+
+                // Browse System Notifications / Alarms button
+                item {
+                    Spacer(modifier = Modifier.height(6.dp))
                     OutlinedButton(
                         onClick = {
                             previewPlayer?.release()
@@ -867,10 +1075,12 @@ fun AthanSoundDialog(
                             }
                             ringtonePickerLauncher.launch(pickerIntent)
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("browse_system_sounds_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.MusicNote,
+                            imageVector = Icons.Default.Alarm,
                             contentDescription = null,
                             modifier = Modifier.size(18.dp)
                         )

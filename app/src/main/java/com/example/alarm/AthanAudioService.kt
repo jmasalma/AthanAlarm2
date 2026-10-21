@@ -22,6 +22,8 @@ import com.example.MainActivity
 import com.example.R
 import com.example.model.AlarmMode
 import com.example.model.PrayerType
+import java.io.File
+import java.io.FileInputStream
 
 class AthanAudioService : Service() {
 
@@ -86,7 +88,7 @@ class AthanAudioService : Service() {
                 startForeground(NOTIFICATION_ID, buildNotification(prayerType, alarmMode))
 
                 if (alarmMode == AlarmMode.ATHAN || alarmMode == AlarmMode.BEEP) {
-                    playAudio(soundChoice, alarmMode)
+                    playAudio(soundChoice, alarmMode, prayerType)
                 }
             }
         }
@@ -94,13 +96,50 @@ class AthanAudioService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun playAudio(soundChoice: String, alarmMode: AlarmMode) {
+    private fun playAudio(soundChoice: String, alarmMode: AlarmMode, prayerType: PrayerType) {
         wakeLock?.acquire(3 * 60 * 1000L) // 3 minutes timeout
 
         requestAudioFocus()
 
         try {
             mediaPlayer?.release()
+
+            val filePath = when {
+                soundChoice.startsWith("custom_file:") -> soundChoice.removePrefix("custom_file:")
+                soundChoice.startsWith("file://") -> Uri.parse(soundChoice).path
+                else -> null
+            }
+            if (filePath != null) {
+                val file = File(filePath)
+                if (file.exists()) {
+                    FileInputStream(file).use { fis ->
+                        mediaPlayer = MediaPlayer().apply {
+                            setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_ALARM)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                    .build()
+                            )
+                            setDataSource(fis.fd)
+                            isLooping = false
+                            setOnCompletionListener {
+                                Log.d(TAG, "Audio completed.")
+                                stopAlarm()
+                                stopSelf()
+                            }
+                            setOnErrorListener { _, what, extra ->
+                                Log.e(TAG, "MediaPlayer error: what=$what extra=$extra")
+                                stopAlarm()
+                                stopSelf()
+                                true
+                            }
+                            prepare()
+                            start()
+                        }
+                    }
+                    return
+                }
+            }
 
             val audioUri: Uri = when {
                 soundChoice.startsWith("content://") || soundChoice.startsWith("file://") -> {
@@ -114,8 +153,12 @@ class AthanAudioService : Service() {
                     RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                         ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                 }
-                soundChoice == "adhan" -> {
-                    Uri.parse("android.resource://$packageName/${R.raw.athan_adhan}")
+                soundChoice == "adhan" || soundChoice == "athan" -> {
+                    if (prayerType == PrayerType.FAJR || prayerType == PrayerType.NEXT_FAJR) {
+                        Uri.parse("android.resource://$packageName/${R.raw.athan_fajr}")
+                    } else {
+                        Uri.parse("android.resource://$packageName/${R.raw.athan_general}")
+                    }
                 }
                 soundChoice == "chime" || alarmMode == AlarmMode.BEEP -> {
                     Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
