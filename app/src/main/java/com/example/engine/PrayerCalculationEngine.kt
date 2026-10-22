@@ -183,7 +183,11 @@ object PrayerCalculationEngine {
         val dhuhr = toPair(dayPrayers.thuhr().hour, dayPrayers.thuhr().minute, PrayerType.DHUHR, dhuhrPrecautionMin)
         val asr = toPair(dayPrayers.assr().hour, dayPrayers.assr().minute, PrayerType.ASR)
         val maghrib = toPair(dayPrayers.maghrib().hour, dayPrayers.maghrib().minute, PrayerType.MAGHRIB)
-        val isha = toPair(dayPrayers.ishaa().hour, dayPrayers.ishaa().minute, PrayerType.ISHA)
+        val isha = if (methodEnum.ishaIntervalMin > 0) {
+            toPair(dayPrayers.maghrib().hour, dayPrayers.maghrib().minute, PrayerType.ISHA, methodEnum.ishaIntervalMin)
+        } else {
+            toPair(dayPrayers.ishaa().hour, dayPrayers.ishaa().minute, PrayerType.ISHA)
+        }
 
         // Midnight & Last third
         val sunsetMin = dayPrayers.maghrib().hour * 60 + dayPrayers.maghrib().minute
@@ -285,7 +289,10 @@ object PrayerCalculationEngine {
             val maxIshaPortion = when (highLatRule) {
                 HighLatitudeRule.MIDDLE_OF_NIGHT -> nightDuration / 2.0
                 HighLatitudeRule.ONE_SEVENTH -> nightDuration / 7.0
-                HighLatitudeRule.ANGLE_BASED -> (method.ishaAngle / 60.0) * nightDuration
+                HighLatitudeRule.ANGLE_BASED -> {
+                    val angle = if (method.ishaAngle > 0.0) method.ishaAngle else 15.0
+                    (angle / 60.0) * nightDuration
+                }
                 HighLatitudeRule.NONE -> nightDuration / 2.0
             }
             if (ishaRaw.isNaN() || (ishaRaw - sunsetRaw) > maxIshaPortion) {
