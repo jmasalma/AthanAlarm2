@@ -34,7 +34,7 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.AlertDialog
@@ -584,7 +584,7 @@ fun PrayerCard(
                     modifier = Modifier.testTag("alarm_toggle_${prayer.type.name.lowercase()}")
                 ) {
                     val (icon, tint) = when (prayer.alarmMode) {
-                        AlarmMode.ATHAN -> Icons.Default.VolumeUp to GoldPrimary
+                        AlarmMode.ATHAN -> Icons.AutoMirrored.Filled.VolumeUp to GoldPrimary
                         AlarmMode.BEEP -> Icons.Default.NotificationsActive to MaterialTheme.colorScheme.primary
                         AlarmMode.SILENT -> Icons.Default.Notifications to MaterialTheme.colorScheme.onSurfaceVariant
                         AlarmMode.MUTED -> Icons.Default.NotificationsOff to MaterialTheme.colorScheme.outline
@@ -664,7 +664,7 @@ fun getPrayerIcon(type: PrayerType): ImageVector {
 
 fun performHaptic(context: Context) {
     try {
-        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        val vibrator = context.getSystemService(Vibrator::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             vibrator?.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
