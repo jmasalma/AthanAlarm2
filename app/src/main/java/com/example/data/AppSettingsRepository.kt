@@ -45,7 +45,11 @@ data class AppSettings(
     val athanSound: String = "chime", // "chime" (default ding/ping), "adhan", "system_notification", "system_alarm", or ringtone URI
     val prePrayerReminderEnabled: Boolean = false,
     val prePrayerReminderMinutes: Int = 20,
-    val hijriDayOffset: Int = 0
+    val hijriDayOffset: Int = 0,
+    val castEnabled: Boolean = false,
+    val castDeviceId: String? = null,
+    val castDeviceName: String? = null,
+    val castAlertSound: String = "athan"
 )
 
 class AppSettingsRepository(private val context: Context) {
@@ -66,6 +70,10 @@ class AppSettingsRepository(private val context: Context) {
         val PRE_REMINDER_ENABLED = booleanPreferencesKey("pre_reminder_enabled")
         val PRE_REMINDER_MINUTES = intPreferencesKey("pre_reminder_minutes")
         val HIJRI_DAY_OFFSET = intPreferencesKey("hijri_day_offset")
+        val CAST_ENABLED = booleanPreferencesKey("cast_enabled")
+        val CAST_DEVICE_ID = stringPreferencesKey("cast_device_id")
+        val CAST_DEVICE_NAME = stringPreferencesKey("cast_device_name")
+        val CAST_ALERT_SOUND = stringPreferencesKey("cast_alert_sound")
 
         fun alarmKey(type: PrayerType) = stringPreferencesKey("alarm_${type.name}")
         fun offsetKey(type: PrayerType) = intPreferencesKey("offset_${type.name}")
@@ -114,6 +122,11 @@ class AppSettingsRepository(private val context: Context) {
             City.CITIES.firstOrNull { it.name.equals(cityName, ignoreCase = true) }?.timeZoneId ?: City.DEFAULT.timeZoneId
         )
 
+        val castEnabled = pref[PreferencesKeys.CAST_ENABLED] ?: false
+        val castDeviceId = pref[PreferencesKeys.CAST_DEVICE_ID]
+        val castDeviceName = pref[PreferencesKeys.CAST_DEVICE_NAME]
+        val castAlertSound = pref[PreferencesKeys.CAST_ALERT_SOUND] ?: "athan"
+
         AppSettings(
             city = City(cityName, country, lat, lon, tz, elev, tzId),
             calculationMethod = calcMethod,
@@ -125,7 +138,11 @@ class AppSettingsRepository(private val context: Context) {
             athanSound = sound,
             prePrayerReminderEnabled = preReminder,
             prePrayerReminderMinutes = preMinutes,
-            hijriDayOffset = hijriOffset
+            hijriDayOffset = hijriOffset,
+            castEnabled = castEnabled,
+            castDeviceId = castDeviceId,
+            castDeviceName = castDeviceName,
+            castAlertSound = castAlertSound
         )
     }
 
@@ -178,5 +195,28 @@ class AppSettingsRepository(private val context: Context) {
 
     suspend fun updateHijriOffset(offset: Int) {
         context.dataStore.edit { it[PreferencesKeys.HIJRI_DAY_OFFSET] = offset }
+    }
+
+    suspend fun updateCastEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.CAST_ENABLED] = enabled }
+    }
+
+    suspend fun updateCastDevice(deviceId: String?, deviceName: String?) {
+        context.dataStore.edit {
+            if (deviceId != null) {
+                it[PreferencesKeys.CAST_DEVICE_ID] = deviceId
+            } else {
+                it.remove(PreferencesKeys.CAST_DEVICE_ID)
+            }
+            if (deviceName != null) {
+                it[PreferencesKeys.CAST_DEVICE_NAME] = deviceName
+            } else {
+                it.remove(PreferencesKeys.CAST_DEVICE_NAME)
+            }
+        }
+    }
+
+    suspend fun updateCastAlertSound(sound: String) {
+        context.dataStore.edit { it[PreferencesKeys.CAST_ALERT_SOUND] = sound }
     }
 }

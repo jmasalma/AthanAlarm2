@@ -40,7 +40,8 @@ data class AthanUiState(
     val distanceToKaabaKm: Double = 0.0,
     val nextAlarmInfo: AthanAlarmScheduler.ScheduledAlarmInfo? = null,
     val isLocating: Boolean = false,
-    val isTestingAlarm: Boolean = false
+    val isTestingAlarm: Boolean = false,
+    val isTestingCast: Boolean = false
 )
 
 class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel() {
@@ -349,6 +350,55 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
             )
             AthanAlarmScheduler.scheduleNextAlarm(context, updated)
         }
+    }
+
+    fun updateCastEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateCastEnabled(enabled)
+        }
+    }
+
+    fun setSelectedCastDevice(deviceId: String, deviceName: String) {
+        viewModelScope.launch {
+            repository.updateCastDevice(deviceId, deviceName)
+        }
+    }
+
+    fun updateCastAlertSound(sound: String) {
+        viewModelScope.launch {
+            repository.updateCastAlertSound(sound)
+        }
+    }
+
+    fun testCastPlayback(context: Context) {
+        _uiState.value = _uiState.value.copy(isTestingCast = true)
+        val castSound = _uiState.value.settings.castAlertSound
+        val targetDeviceId = _uiState.value.settings.castDeviceId
+        val targetDeviceName = _uiState.value.settings.castDeviceName
+
+        // 1. Always play locally on phone (user choice: dual playback)
+        testAlarm(context)
+
+        // 2. Stream to Chromecast
+        com.example.cast.CastMediaManager.playOnCast(
+            context = context,
+            soundChoice = castSound,
+            prayerType = PrayerType.DHUHR,
+            targetDeviceId = targetDeviceId,
+            targetDeviceName = targetDeviceName,
+            onStarted = {
+                _uiState.value = _uiState.value.copy(isTestingCast = true)
+            },
+            onError = { errorMsg ->
+                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    fun stopTestCastPlayback(context: Context) {
+        _uiState.value = _uiState.value.copy(isTestingCast = false)
+        stopTestAlarm(context)
+        com.example.cast.CastMediaManager.stopCast(context)
     }
 
     override fun onCleared() {

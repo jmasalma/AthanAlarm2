@@ -34,9 +34,13 @@ import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.CastConnected
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Info
+import com.example.ui.components.CastDeviceSelectionDialog
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.MusicNote
@@ -101,6 +105,8 @@ fun SettingsScreen(
     var showBatteryGuide by remember { mutableStateOf(false) }
     var showPreAlertMinutesDialog by remember { mutableStateOf(false) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
+    var showCastDeviceDialog by remember { mutableStateOf(false) }
+    var showCastSoundDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -275,6 +281,136 @@ fun SettingsScreen(
                         subtitle = "Ensure Android does not kill prayer alarms in Doze mode",
                         onClick = { showBatteryGuide = true }
                     )
+                }
+            }
+        }
+
+        // Section: Google / Chromecast Audio
+        item {
+            SettingsSectionHeader(title = "Google / Chromecast Audio")
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column {
+                    // Master Toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = if (uiState.settings.castEnabled) Icons.Default.CastConnected else Icons.Default.Cast,
+                                contentDescription = null,
+                                tint = if (uiState.settings.castEnabled) GoldPrimary else MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column {
+                                Text(
+                                    text = "Cast to Google/Chromecast",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (uiState.settings.castEnabled)
+                                        "Broadcasts prayer call to smart speaker (and always on phone)"
+                                    else
+                                        "Disabled (phone audio only)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = uiState.settings.castEnabled,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateCastEnabled(enabled)
+                                if (enabled) {
+                                    showCastDeviceDialog = true
+                                }
+                            },
+                            modifier = Modifier.testTag("cast_toggle_switch")
+                        )
+                    }
+
+                    if (uiState.settings.castEnabled) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+                        // Device Selection Row
+                        SettingsClickableItem(
+                            icon = Icons.Default.Speaker,
+                            title = "Chromecast Device",
+                            subtitle = uiState.settings.castDeviceName ?: "Tap to choose Google / Chromecast speaker",
+                            onClick = { showCastDeviceDialog = true }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+                        // Alert Sound Selection Row
+                        val castSoundSubtitle = when {
+                            uiState.settings.castAlertSound == "chime" -> "Gentle Ding / Chime"
+                            uiState.settings.castAlertSound == "adhan" || uiState.settings.castAlertSound == "athan" -> "Full Athan (Makkah)"
+                            uiState.settings.castAlertSound.startsWith("custom_file:") || uiState.settings.castAlertSound.startsWith("content://") -> "Custom Audio"
+                            else -> "Full Athan (Makkah)"
+                        }
+
+                        SettingsClickableItem(
+                            icon = Icons.Default.MusicNote,
+                            title = "Cast Alert Sound",
+                            subtitle = castSoundSubtitle,
+                            onClick = { showCastSoundDialog = true }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+                        // Test Play Notification Row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Test Notification Playback",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (uiState.isTestingCast)
+                                        "Testing live playback on phone & speaker..."
+                                    else
+                                        "Verify sound on phone and ${uiState.settings.castDeviceName ?: "selected speaker"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (uiState.isTestingCast) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            Button(
+                                onClick = {
+                                    if (uiState.isTestingCast) {
+                                        viewModel.stopTestCastPlayback(context)
+                                    } else {
+                                        viewModel.testCastPlayback(context)
+                                    }
+                                },
+                                modifier = Modifier.testTag("test_cast_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (uiState.isTestingCast) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (uiState.isTestingCast) "Stop" else "Test Play")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -496,6 +632,29 @@ fun SettingsScreen(
                 showPreAlertMinutesDialog = false
             },
             onDismiss = { showPreAlertMinutesDialog = false }
+        )
+    }
+
+    if (showCastDeviceDialog) {
+        CastDeviceSelectionDialog(
+            context = context,
+            currentSelectedId = uiState.settings.castDeviceId,
+            onDeviceSelected = { deviceId, deviceName ->
+                viewModel.setSelectedCastDevice(deviceId, deviceName)
+                showCastDeviceDialog = false
+            },
+            onDismiss = { showCastDeviceDialog = false }
+        )
+    }
+
+    if (showCastSoundDialog) {
+        AthanSoundDialog(
+            currentSound = uiState.settings.castAlertSound,
+            onSelect = { sound ->
+                viewModel.updateCastAlertSound(sound)
+                showCastSoundDialog = false
+            },
+            onDismiss = { showCastSoundDialog = false }
         )
     }
 }

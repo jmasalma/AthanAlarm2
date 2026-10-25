@@ -20,8 +20,14 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.cast.CastMediaManager
+import com.example.data.AppSettingsRepository
 import com.example.model.AlarmMode
 import com.example.model.PrayerType
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileInputStream
 
@@ -100,6 +106,25 @@ class AthanAudioService : Service() {
         wakeLock?.acquire(3 * 60 * 1000L) // 3 minutes timeout
 
         requestAudioFocus()
+
+        // If Chromecast is enabled, stream audio to the connected Chromecast device as well
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val settings = AppSettingsRepository(applicationContext).settingsFlow.first()
+                if (settings.castEnabled && (!settings.castDeviceId.isNullOrBlank() || !settings.castDeviceName.isNullOrBlank())) {
+                    val castSound = if (settings.castAlertSound.isNotBlank()) settings.castAlertSound else soundChoice
+                    CastMediaManager.playOnCast(
+                        context = applicationContext,
+                        soundChoice = castSound,
+                        prayerType = prayerType,
+                        targetDeviceId = settings.castDeviceId,
+                        targetDeviceName = settings.castDeviceName
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Cast playback initiation skipped: ${e.message}")
+            }
+        }
 
         try {
             mediaPlayer?.release()
@@ -243,6 +268,8 @@ class AthanAudioService : Service() {
         }
 
         abandonAudioFocus()
+
+        CastMediaManager.stopCast(applicationContext)
 
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
