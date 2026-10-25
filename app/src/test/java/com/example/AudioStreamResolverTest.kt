@@ -34,14 +34,14 @@ class AudioStreamResolverTest {
     fun testResolveBundledAthanAudio() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val resolvedGeneral = AudioStreamResolver.resolveAudio(context, "athan", PrayerType.DHUHR)
-        assertEquals("Full Athan", resolvedGeneral.title)
+        assertEquals("Athan", resolvedGeneral.title)
         assertEquals("audio/mpeg", resolvedGeneral.mimeType)
         val streamGeneral = resolvedGeneral.streamSupplier.invoke()
         assertNotNull(streamGeneral)
         streamGeneral?.close()
 
         val resolvedFajr = AudioStreamResolver.resolveAudio(context, "athan", PrayerType.FAJR)
-        assertEquals("Fajr Athan", resolvedFajr.title)
+        assertEquals("Athan", resolvedFajr.title)
         assertEquals("audio/mpeg", resolvedFajr.mimeType)
         val streamFajr = resolvedFajr.streamSupplier.invoke()
         assertNotNull(streamFajr)
@@ -53,9 +53,9 @@ class AudioStreamResolverTest {
         val server = LocalHttpAudioServer()
         val dummyData = "dummy audio data".toByteArray()
 
-        val url = server.start(
-            streamSupplier = { ByteArrayInputStream(dummyData) },
-            contentLength = dummyData.size.toLong()
+        val url = server.startWithBytes(
+            bytes = dummyData,
+            mimeType = "audio/mpeg"
         )
 
         assertNotNull(url)

@@ -3,7 +3,6 @@ package com.example.ui.components
 import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,11 +16,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -42,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.mediarouter.media.MediaRouter
 import com.example.cast.CastMediaManager
 import com.example.ui.theme.GoldPrimary
@@ -49,7 +51,8 @@ import com.example.ui.theme.GoldPrimary
 data class CastDeviceItem(
     val id: String,
     val name: String,
-    val description: String = "Google Cast Audio"
+    val description: String = "Google Cast Audio",
+    val isGroup: Boolean = false
 )
 
 @Composable
@@ -66,17 +69,25 @@ fun CastDeviceSelectionDialog(
         val routes = mediaRouter.routes.filter { route ->
             !route.isDefault && route.matchesSelector(selector)
         }.map { route ->
+            val isGroup = route.name.contains("group", ignoreCase = true) ||
+                    (route.description?.contains("group", ignoreCase = true) == true)
             CastDeviceItem(
                 id = route.id,
                 name = route.name,
-                description = route.description ?: "Ready to connect"
+                description = route.description ?: if (isGroup) "Speaker Group" else "Ready to connect",
+                isGroup = isGroup
             )
         }
         return routes
     }
 
     var discoveredDevices by remember { mutableStateOf(getFilteredRoutes()) }
-    var isScanning by remember { mutableStateOf(true) }
+
+    // Parse currently selected device IDs (supports multiple comma-separated IDs)
+    val initialSelected = remember(currentSelectedId) {
+        currentSelectedId?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet() ?: emptySet()
+    }
+    var selectedDeviceIds by remember { mutableStateOf(initialSelected) }
 
     DisposableEffect(mediaRouter) {
         val callback = object : MediaRouter.Callback() {
@@ -139,61 +150,110 @@ fun CastDeviceSelectionDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "Select a smart speaker or display on your Wi-Fi network for prayer notifications.",
+                    text = "Select one or more speakers on your Wi-Fi network for prayer notifications.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
+
+                // Helpful Whole-Home Speaker Group Tip
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = GoldPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Tip: Create a 'Speaker Group' in Google Home to broadcast to every room in sync.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            lineHeight = 14.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(6.dp))
 
                 if (discoveredDevices.isEmpty()) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 24.dp),
+                            .padding(vertical = 20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(36.dp),
+                            modifier = Modifier.size(32.dp),
                             color = GoldPrimary,
                             strokeWidth = 3.dp
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
                         Text(
                             text = "Scanning local Wi-Fi...",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Ensure your Google Home / Nest speaker is on the same Wi-Fi.",
+                            text = "Ensure your Google Home / Nest speaker is powered on and on the same Wi-Fi.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        Spacer(modifier = Modifier.height(16.dp))
-                        TextButton(
-                            onClick = {
-                                // Provide preset preview device for emulator / offline testing
-                                onDeviceSelected("preset_living_room", "Living Room Speaker")
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(
+                                onClick = {
+                                    val presetId = "preset_living_room"
+                                    val presetName = "Living Room Speaker"
+                                    onDeviceSelected(presetId, presetName)
+                                    onDismiss()
+                                }
+                            ) {
+                                Text("Living Room (Preview)")
                             }
-                        ) {
-                            Text("Use Living Room Speaker (Preview)")
+
+                            TextButton(
+                                onClick = {
+                                    val presetIds = "preset_living_room,preset_bedroom"
+                                    val presetNames = "Living Room Speaker, Bedroom Speaker"
+                                    onDeviceSelected(presetIds, presetNames)
+                                    onDismiss()
+                                }
+                            ) {
+                                Text("Multiple (Preview)")
+                            }
                         }
                     }
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth()) {
                         items(discoveredDevices) { device ->
-                            val isSelected = device.id == currentSelectedId
+                            val isSelected = selectedDeviceIds.contains(device.id)
+
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp)
                                     .clip(RoundedCornerShape(12.dp))
                                     .clickable {
-                                        onDeviceSelected(device.id, device.name)
+                                        val nextSet = if (isSelected) {
+                                            selectedDeviceIds - device.id
+                                        } else {
+                                            selectedDeviceIds + device.id
+                                        }
+                                        selectedDeviceIds = nextSet
                                     }
                                     .testTag("cast_device_${device.id}"),
                                 color = if (isSelected)
@@ -204,21 +264,34 @@ fun CastDeviceSelectionDialog(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        imageVector = if (device.name.contains("tv", ignoreCase = true) || device.name.contains("display", ignoreCase = true)) {
-                                            Icons.Default.Tv
-                                        } else {
-                                            Icons.Default.Speaker
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = { checked ->
+                                            selectedDeviceIds = if (checked) {
+                                                selectedDeviceIds + device.id
+                                            } else {
+                                                selectedDeviceIds - device.id
+                                            }
                                         },
-                                        contentDescription = null,
-                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(24.dp)
                                     )
 
-                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Icon(
+                                        imageVector = when {
+                                            device.name.contains("tv", ignoreCase = true) || device.name.contains("display", ignoreCase = true) -> Icons.Default.Tv
+                                            else -> Icons.Default.Speaker
+                                        },
+                                        contentDescription = null,
+                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+
+                                    Spacer(modifier = Modifier.width(12.dp))
 
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
@@ -232,15 +305,6 @@ fun CastDeviceSelectionDialog(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-
-                                    if (isSelected) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Selected",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -249,6 +313,28 @@ fun CastDeviceSelectionDialog(
             }
         },
         confirmButton = {
+            Button(
+                onClick = {
+                    if (selectedDeviceIds.isNotEmpty()) {
+                        val selectedDevices = discoveredDevices.filter { selectedDeviceIds.contains(it.id) }
+                        val joinedIds = selectedDevices.joinToString(",") { it.id }
+                        val joinedNames = selectedDevices.joinToString(", ") { it.name }
+
+                        // Pre-connect route immediately to active session
+                        selectedDevices.firstOrNull()?.id?.let { firstId ->
+                            CastMediaManager.selectRouteById(context, firstId)
+                        }
+
+                        onDeviceSelected(joinedIds, joinedNames)
+                    }
+                    onDismiss()
+                },
+                enabled = selectedDeviceIds.isNotEmpty() || discoveredDevices.isEmpty()
+            ) {
+                Text(if (selectedDeviceIds.size > 1) "Save (${selectedDeviceIds.size} Devices)" else "Save Selection")
+            }
+        },
+        dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
             }

@@ -343,8 +343,8 @@ fun SettingsScreen(
                         // Device Selection Row
                         SettingsClickableItem(
                             icon = Icons.Default.Speaker,
-                            title = "Chromecast Device",
-                            subtitle = uiState.settings.castDeviceName ?: "Tap to choose Google / Chromecast speaker",
+                            title = "Chromecast Device(s)",
+                            subtitle = uiState.settings.castDeviceName ?: "Tap to choose Google / Chromecast speaker(s)",
                             onClick = { showCastDeviceDialog = true }
                         )
 
@@ -353,9 +353,9 @@ fun SettingsScreen(
                         // Alert Sound Selection Row
                         val castSoundSubtitle = when {
                             uiState.settings.castAlertSound == "chime" -> "Gentle Ding / Chime"
-                            uiState.settings.castAlertSound == "adhan" || uiState.settings.castAlertSound == "athan" -> "Full Athan (Makkah)"
+                            uiState.settings.castAlertSound == "adhan" || uiState.settings.castAlertSound == "athan" -> "Athan"
                             uiState.settings.castAlertSound.startsWith("custom_file:") || uiState.settings.castAlertSound.startsWith("content://") -> "Custom Audio"
-                            else -> "Full Athan (Makkah)"
+                            else -> "Athan"
                         }
 
                         SettingsClickableItem(
@@ -383,9 +383,9 @@ fun SettingsScreen(
                                 )
                                 Text(
                                     text = if (uiState.isTestingCast)
-                                        "Testing live playback on phone & speaker..."
+                                        "Testing live playback on ${uiState.settings.castDeviceName ?: "Google / Chromecast speaker"}..."
                                     else
-                                        "Verify sound on phone and ${uiState.settings.castDeviceName ?: "selected speaker"}",
+                                        "Verify sound on ${uiState.settings.castDeviceName ?: "Google / Chromecast speaker"}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (uiState.isTestingCast) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )

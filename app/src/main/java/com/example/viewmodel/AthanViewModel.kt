@@ -376,10 +376,7 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
         val targetDeviceId = _uiState.value.settings.castDeviceId
         val targetDeviceName = _uiState.value.settings.castDeviceName
 
-        // 1. Always play locally on phone (user choice: dual playback)
-        testAlarm(context)
-
-        // 2. Stream to Chromecast
+        // Only test on Google/Chromecast (no local phone playback during this test)
         com.example.cast.CastMediaManager.playOnCast(
             context = context,
             soundChoice = castSound,
@@ -390,14 +387,14 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
                 _uiState.value = _uiState.value.copy(isTestingCast = true)
             },
             onError = { errorMsg ->
-                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
+                _uiState.value = _uiState.value.copy(isTestingCast = false)
+                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_LONG).show()
             }
         )
     }
 
     fun stopTestCastPlayback(context: Context) {
         _uiState.value = _uiState.value.copy(isTestingCast = false)
-        stopTestAlarm(context)
         com.example.cast.CastMediaManager.stopCast(context)
     }
 
