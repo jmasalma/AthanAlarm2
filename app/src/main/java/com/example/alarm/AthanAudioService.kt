@@ -30,6 +30,7 @@ import com.example.util.LogCategory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
@@ -44,7 +45,9 @@ class AthanAudioService : Service() {
     private var focusRequest: AudioFocusRequest? = null
 
     private var isLocalAudioPlaying = false
+    private var isCastPlayingOrPending = false
     private var castingObserverJob: Job? = null
+    private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
 
     companion object {
         private const val TAG = "AthanAudioService"
@@ -111,7 +114,7 @@ class AthanAudioService : Service() {
                 startForeground(NOTIFICATION_ID, buildNotification(prayerType, alarmMode))
 
                 if (alarmMode != AlarmMode.MUTED) {
-                    playAudio(soundChoice, alarmMode, prayerType)
+                    handleAlarmPlayback(soundChoice, alarmMode, prayerType)
                 }
             }
         }
@@ -119,154 +122,190 @@ class AthanAudioService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun playAudio(soundChoice: String, alarmMode: AlarmMode, prayerType: PrayerType) {
+    private fun handleAlarmPlayback(soundChoice: String, alarmMode: AlarmMode, prayerType: PrayerType) {
         wakeLock?.acquire(5 * 60 * 1000L) // 5 minutes safety timeout
         wifiLock?.acquire()
 
-        requestAudioFocus()
-
-        // 1. If Cast is enabled, initiate casting to Google Home / Chromecast device
-        CoroutineScope(Dispatchers.IO).launch {
+        serviceScope.launch {
             try {
                 val settings = AppSettingsRepository(applicationContext).settingsFlow.first()
-                if (settings.castEnabled) {
+                val isCastEnabled = settings.castEnabled
+                val isPhoneAudioEnabled = (alarmMode == AlarmMode.ATHAN || alarmMode == AlarmMode.BEEP)
+
+                AppLogger.i(
+                    LogCategory.ALARM,
+                    TAG,
+                    "handleAlarmPlayback: prayer=${prayerType.name}, mode=$alarmMode, phoneAudio=$isPhoneAudioEnabled, castEnabled=$isCastEnabled"
+                )
+
+                if (!isCastEnabled && !isPhoneAudioEnabled) {
+                    AppLogger.i(LogCategory.ALARM, TAG, "Silent mode with Cast disabled. Notification active.")
+                    releaseLocks()
+                    return@launch
+                }
+
+                if (isPhoneAudioEnabled) {
+                    isLocalAudioPlaying = true
+                    requestAudioFocus()
+                    playLocalAudio(soundChoice, alarmMode, prayerType)
+                } else {
+                    isLocalAudioPlaying = false
+                }
+
+                if (isCastEnabled) {
+                    isCastPlayingOrPending = true
                     val castSound = if (settings.castAlertSound.isNotBlank()) settings.castAlertSound else soundChoice
                     AppLogger.i(LogCategory.ALARM, TAG, "Triggering prayer cast: device=${settings.castDeviceName}, sound=$castSound")
+
                     CastMediaManager.playOnCast(
                         context = applicationContext,
                         soundChoice = castSound,
                         prayerType = prayerType,
                         targetDeviceId = settings.castDeviceId,
-                        targetDeviceName = settings.castDeviceName
+                        targetDeviceName = settings.castDeviceName,
+                        onStarted = {
+                            AppLogger.i(LogCategory.ALARM, TAG, "Cast playback confirmed started on speaker.")
+                        },
+                        onError = { errMsg ->
+                            AppLogger.w(LogCategory.ALARM, TAG, "Cast playback error reported: $errMsg")
+                            isCastPlayingOrPending = false
+                            checkAllAudioCompletedAndStop()
+                        }
                     )
-                }
-            } catch (e: Exception) {
-                AppLogger.w(LogCategory.ALARM, TAG, "Cast playback initiation error: ${e.message}")
-            }
-        }
 
-        // 2. Monitor Cast status so service stays alive while cast playback is in progress
-        castingObserverJob?.cancel()
-        castingObserverJob = CoroutineScope(Dispatchers.Main).launch {
-            CastMediaManager.isCastingFlow.collect { isCasting ->
-                if (!isCasting && !isLocalAudioPlaying) {
-                    AppLogger.i(LogCategory.ALARM, TAG, "Both phone audio and cast audio completed. Stopping foreground service.")
-                    stopAlarm()
-                    stopSelf()
-                }
-            }
-        }
-
-        // 3. Play local audio on phone (unless user selected SILENT / notification only)
-        if (alarmMode == AlarmMode.ATHAN || alarmMode == AlarmMode.BEEP) {
-            isLocalAudioPlaying = true
-            try {
-                mediaPlayer?.release()
-
-                val filePath = when {
-                    soundChoice.startsWith("custom_file:") -> soundChoice.removePrefix("custom_file:")
-                    soundChoice.startsWith("file://") -> Uri.parse(soundChoice).path
-                    else -> null
-                }
-                if (filePath != null) {
-                    val file = File(filePath)
-                    if (file.exists()) {
-                        FileInputStream(file).use { fis ->
-                            mediaPlayer = MediaPlayer().apply {
-                                setAudioAttributes(
-                                    AudioAttributes.Builder()
-                                        .setUsage(AudioAttributes.USAGE_ALARM)
-                                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                                        .build()
-                                )
-                                setDataSource(fis.fd)
-                                isLooping = false
-                                setOnCompletionListener {
-                                    AppLogger.i(LogCategory.ALARM, TAG, "Local phone audio completed.")
-                                    isLocalAudioPlaying = false
-                                    checkCompletionAndStop()
-                                }
-                                setOnErrorListener { _, what, extra ->
-                                    AppLogger.e(LogCategory.ALARM, TAG, "MediaPlayer error: what=$what extra=$extra")
-                                    isLocalAudioPlaying = false
-                                    checkCompletionAndStop()
-                                    true
-                                }
-                                prepare()
-                                start()
+                    // Monitor isCastingFlow: wait for active, then wait for completion
+                    castingObserverJob?.cancel()
+                    castingObserverJob = launch {
+                        var hasObservedActive = false
+                        CastMediaManager.isCastingFlow.collect { isCasting ->
+                            if (isCasting) {
+                                hasObservedActive = true
+                                AppLogger.i(LogCategory.ALARM, TAG, "Cast status: STREAMING_ACTIVE")
+                            } else if (hasObservedActive) {
+                                AppLogger.i(LogCategory.ALARM, TAG, "Cast status: STREAMING_FINISHED")
+                                isCastPlayingOrPending = false
+                                checkAllAudioCompletedAndStop()
                             }
                         }
-                        return
                     }
-                }
-
-                val audioUri: Uri = when {
-                    soundChoice.startsWith("content://") || soundChoice.startsWith("file://") -> {
-                        Uri.parse(soundChoice)
-                    }
-                    soundChoice == "system_notification" -> {
-                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                    }
-                    soundChoice == "system_alarm" -> {
-                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                    }
-                    soundChoice == "adhan" || soundChoice == "athan" -> {
-                        if (prayerType == PrayerType.FAJR || prayerType == PrayerType.NEXT_FAJR) {
-                            Uri.parse("android.resource://$packageName/${R.raw.athan_fajr}")
-                        } else {
-                            Uri.parse("android.resource://$packageName/${R.raw.athan_general}")
-                        }
-                    }
-                    soundChoice == "chime" || alarmMode == AlarmMode.BEEP -> {
-                        Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
-                    }
-                    else -> {
-                        Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
-                    }
-                }
-
-                mediaPlayer = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build()
-                    )
-                    setDataSource(applicationContext, audioUri)
-                    isLooping = false
-                    setOnCompletionListener {
-                        AppLogger.i(LogCategory.ALARM, TAG, "Local phone audio completed.")
-                        isLocalAudioPlaying = false
-                        checkCompletionAndStop()
-                    }
-                    setOnErrorListener { _, what, extra ->
-                        AppLogger.e(LogCategory.ALARM, TAG, "MediaPlayer error: what=$what extra=$extra")
-                        isLocalAudioPlaying = false
-                        checkCompletionAndStop()
-                        true
-                    }
-                    prepare()
-                    start()
+                } else {
+                    isCastPlayingOrPending = false
                 }
             } catch (e: Exception) {
-                AppLogger.e(LogCategory.ALARM, TAG, "Error playing local audio: ${e.message}", e)
-                isLocalAudioPlaying = false
-                checkCompletionAndStop()
+                AppLogger.e(LogCategory.ALARM, TAG, "Error in handleAlarmPlayback: ${e.message}", e)
+                releaseLocks()
             }
-        } else {
-            isLocalAudioPlaying = false
         }
     }
 
-    private fun checkCompletionAndStop() {
-        if (!isLocalAudioPlaying && !CastMediaManager.isCastingFlow.value) {
-            AppLogger.i(LogCategory.ALARM, TAG, "Local audio finished and Cast is not active. Stopping service.")
+    private fun playLocalAudio(soundChoice: String, alarmMode: AlarmMode, prayerType: PrayerType) {
+        try {
+            mediaPlayer?.release()
+
+            val filePath = when {
+                soundChoice.startsWith("custom_file:") -> soundChoice.removePrefix("custom_file:")
+                soundChoice.startsWith("file://") -> Uri.parse(soundChoice).path
+                else -> null
+            }
+            if (filePath != null) {
+                val file = File(filePath)
+                if (file.exists()) {
+                    FileInputStream(file).use { fis ->
+                        mediaPlayer = MediaPlayer().apply {
+                            setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_ALARM)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                    .build()
+                            )
+                            setDataSource(fis.fd)
+                            isLooping = false
+                            setOnCompletionListener {
+                                AppLogger.i(LogCategory.ALARM, TAG, "Local phone audio completed.")
+                                isLocalAudioPlaying = false
+                                checkAllAudioCompletedAndStop()
+                            }
+                            setOnErrorListener { _, what, extra ->
+                                AppLogger.e(LogCategory.ALARM, TAG, "MediaPlayer error: what=$what extra=$extra")
+                                isLocalAudioPlaying = false
+                                checkAllAudioCompletedAndStop()
+                                true
+                            }
+                            prepare()
+                            start()
+                        }
+                    }
+                    return
+                }
+            }
+
+            val audioUri: Uri = when {
+                soundChoice.startsWith("content://") || soundChoice.startsWith("file://") -> {
+                    Uri.parse(soundChoice)
+                }
+                soundChoice == "system_notification" -> {
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                }
+                soundChoice == "system_alarm" -> {
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                }
+                soundChoice == "adhan" || soundChoice == "athan" -> {
+                    if (prayerType == PrayerType.FAJR || prayerType == PrayerType.NEXT_FAJR) {
+                        Uri.parse("android.resource://$packageName/${R.raw.athan_fajr}")
+                    } else {
+                        Uri.parse("android.resource://$packageName/${R.raw.athan_general}")
+                    }
+                }
+                soundChoice == "chime" || alarmMode == AlarmMode.BEEP -> {
+                    Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
+                }
+                else -> {
+                    Uri.parse("android.resource://$packageName/${R.raw.athan_chime}")
+                }
+            }
+
+            mediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                setDataSource(applicationContext, audioUri)
+                isLooping = false
+                setOnCompletionListener {
+                    AppLogger.i(LogCategory.ALARM, TAG, "Local phone audio completed.")
+                    isLocalAudioPlaying = false
+                    checkAllAudioCompletedAndStop()
+                }
+                setOnErrorListener { _, what, extra ->
+                    AppLogger.e(LogCategory.ALARM, TAG, "MediaPlayer error: what=$what extra=$extra")
+                    isLocalAudioPlaying = false
+                    checkAllAudioCompletedAndStop()
+                    true
+                }
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            AppLogger.e(LogCategory.ALARM, TAG, "Error playing local audio: ${e.message}", e)
+            isLocalAudioPlaying = false
+            checkAllAudioCompletedAndStop()
+        }
+    }
+
+    private fun checkAllAudioCompletedAndStop() {
+        AppLogger.i(
+            LogCategory.ALARM,
+            TAG,
+            "checkAllAudioCompletedAndStop: localPlaying=$isLocalAudioPlaying, castPlaying=$isCastPlayingOrPending"
+        )
+        if (!isLocalAudioPlaying && !isCastPlayingOrPending) {
+            AppLogger.i(LogCategory.ALARM, TAG, "All audio playback (local + cast) completed. Stopping foreground service.")
             stopAlarm()
             stopSelf()
-        } else {
-            AppLogger.i(LogCategory.ALARM, TAG, "Local audio completed, but Cast is still streaming to smart speaker.")
         }
     }
 
@@ -303,6 +342,7 @@ class AthanAudioService : Service() {
 
     private fun stopAlarm() {
         isLocalAudioPlaying = false
+        isCastPlayingOrPending = false
         castingObserverJob?.cancel()
 
         try {
@@ -318,16 +358,19 @@ class AthanAudioService : Service() {
         }
 
         abandonAudioFocus()
-
         CastMediaManager.stopCast(applicationContext)
+        releaseLocks()
+    }
 
-        if (wifiLock?.isHeld == true) {
-            wifiLock?.release()
-        }
-
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-        }
+    private fun releaseLocks() {
+        try {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (_: Exception) {}
     }
 
     private fun snoozeAlarm(intent: Intent?) {
@@ -424,6 +467,7 @@ class AthanAudioService : Service() {
 
     override fun onDestroy() {
         stopAlarm()
+        serviceScope.cancel()
         super.onDestroy()
     }
 }
