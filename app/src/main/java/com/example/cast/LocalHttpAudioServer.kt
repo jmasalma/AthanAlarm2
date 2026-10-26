@@ -3,7 +3,8 @@ package com.example.cast
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
-import android.util.Log
+import com.example.util.AppLogger
+import com.example.util.LogCategory
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.Inet4Address
@@ -46,14 +47,14 @@ class LocalHttpAudioServer {
                             if (addr is Inet4Address && !addr.isLoopbackAddress) {
                                 val host = addr.hostAddress
                                 if (!host.isNullOrBlank() && host != "127.0.0.1") {
-                                    Log.d(TAG, "Resolved IP via ConnectivityManager active network: $host")
+                                    AppLogger.i(LogCategory.SERVER, TAG, "Resolved local Wi-Fi IP via active network: $host")
                                     return host
                                 }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "ConnectivityManager lookup failed: ${e.message}")
+                    AppLogger.w(LogCategory.SERVER, TAG, "ConnectivityManager lookup failed: ${e.message}")
                 }
             }
 
@@ -73,12 +74,12 @@ class LocalHttpAudioServer {
                             ipInt shr 24 and 0xff
                         )
                         if (ip != "0.0.0.0" && ip != "127.0.0.1") {
-                            Log.d(TAG, "Resolved IP via WifiManager: $ip")
+                            AppLogger.i(LogCategory.SERVER, TAG, "Resolved Wi-Fi IP via WifiManager: $ip")
                             return ip
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "WifiManager IP lookup failed: ${e.message}")
+                    AppLogger.w(LogCategory.SERVER, TAG, "WifiManager IP lookup failed: ${e.message}")
                 }
             }
 
@@ -107,7 +108,7 @@ class LocalHttpAudioServer {
                                 if (intf.name.startsWith("wlan") || intf.name.startsWith("eth") ||
                                     host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")
                                 ) {
-                                    Log.d(TAG, "Resolved IP via interface ${intf.name}: $host")
+                                    AppLogger.i(LogCategory.SERVER, TAG, "Resolved IP via interface ${intf.name}: $host")
                                     return host
                                 }
                             }
@@ -115,9 +116,10 @@ class LocalHttpAudioServer {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error resolving network interfaces: ${e.message}", e)
+                AppLogger.e(LogCategory.SERVER, TAG, "Error resolving network interfaces: ${e.message}", e)
             }
 
+            AppLogger.w(LogCategory.SERVER, TAG, "Fallback to loopback 127.0.0.1 (No local Wi-Fi IP detected)")
             return "127.0.0.1"
         }
     }
@@ -144,7 +146,7 @@ class LocalHttpAudioServer {
         val ip = getLocalIpAddress(context)
         val ext = if (contentType.contains("wav")) "wav" else "mp3"
         val url = "http://$ip:$port/athan.$ext"
-        Log.d(TAG, "Server started at $url (Bytes: ${bytes.size}, Content-Type: $contentType)")
+        AppLogger.i(LogCategory.SERVER, TAG, "Local HTTP audio server started on $url (${bytes.size} bytes, type=$contentType)")
         return url
     }
 
@@ -156,7 +158,7 @@ class LocalHttpAudioServer {
         val bytes = try {
             streamSupplier.invoke()?.use { it.readBytes() } ?: ByteArray(0)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed reading stream supplier: ${e.message}", e)
+            AppLogger.e(LogCategory.SERVER, TAG, "Failed reading stream supplier: ${e.message}", e)
             ByteArray(0)
         }
         return startWithBytes(bytes, "audio/mpeg", context)
@@ -164,6 +166,9 @@ class LocalHttpAudioServer {
 
     @Synchronized
     fun stop() {
+        if (isRunning) {
+            AppLogger.i(LogCategory.SERVER, TAG, "Stopping local HTTP server")
+        }
         isRunning = false
         try {
             serverSocket?.close()
@@ -181,7 +186,7 @@ class LocalHttpAudioServer {
                 }
             } catch (e: Exception) {
                 if (isRunning) {
-                    Log.w(TAG, "Exception while accepting client connection: ${e.message}")
+                    AppLogger.w(LogCategory.SERVER, TAG, "Client socket accept interrupted: ${e.message}")
                 }
                 break
             }
@@ -189,11 +194,12 @@ class LocalHttpAudioServer {
     }
 
     private fun handleClient(client: Socket) {
+        val clientIp = client.inetAddress?.hostAddress ?: "unknown"
         try {
             client.soTimeout = 15000
             val input = client.getInputStream().bufferedReader(Charsets.US_ASCII)
             val requestLine = input.readLine() ?: return
-            Log.d(TAG, "Received client request: $requestLine")
+            AppLogger.i(LogCategory.SERVER, TAG, "Client [$clientIp] request: $requestLine")
 
             val parts = requestLine.split(" ")
             val method = parts.getOrNull(0)?.uppercase(Locale.US) ?: "GET"
@@ -215,6 +221,7 @@ class LocalHttpAudioServer {
             when (method) {
                 "OPTIONS" -> {
                     // Pre-flight CORS request from Chrome / Cast Web Receiver
+                    AppLogger.i(LogCategory.SERVER, TAG, "Responding 200 OK to OPTIONS pre-flight for $clientIp")
                     val response = "HTTP/1.1 200 OK\r\n" +
                             "Access-Control-Allow-Origin: *\r\n" +
                             "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n" +
@@ -228,6 +235,7 @@ class LocalHttpAudioServer {
 
                 "HEAD" -> {
                     // Metadata check
+                    AppLogger.i(LogCategory.SERVER, TAG, "Responding 200 OK to HEAD request for $clientIp (length=$totalLength)")
                     val header = StringBuilder()
                     header.append("HTTP/1.1 200 OK\r\n")
                     header.append("Content-Type: $contentType\r\n")
@@ -245,20 +253,23 @@ class LocalHttpAudioServer {
 
                 "GET" -> {
                     if (rangeHeader != null && totalLength > 0) {
+                        AppLogger.i(LogCategory.SERVER, TAG, "Handling Range request: $rangeHeader from $clientIp")
                         handleRangeRequest(rangeHeader, data, totalLength, output)
                     } else {
+                        AppLogger.i(LogCategory.SERVER, TAG, "Handling full GET request (bytes=$totalLength) from $clientIp")
                         handleFullRequest(data, totalLength, output)
                     }
                 }
 
                 else -> {
+                    AppLogger.w(LogCategory.SERVER, TAG, "Unsupported method $method from $clientIp")
                     val notAllowed = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                     output.write(notAllowed.toByteArray(Charsets.US_ASCII))
                     output.flush()
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Client socket handler completed: ${e.message}")
+            AppLogger.w(LogCategory.SERVER, TAG, "Client handler finished for $clientIp: ${e.message}")
         } finally {
             try {
                 client.close()
@@ -290,7 +301,6 @@ class LocalHttpAudioServer {
         val rangeParts = rangeStr.split("-")
         val (start, end) = when {
             rangeParts[0].isEmpty() && rangeParts.size > 1 -> {
-                // Suffix range: bytes=-500
                 val suffix = rangeParts[1].toLongOrNull() ?: 0L
                 val s = (totalLength - suffix).coerceAtLeast(0L)
                 Pair(s, totalLength - 1)

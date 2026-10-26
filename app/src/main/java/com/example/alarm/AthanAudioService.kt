@@ -25,6 +25,8 @@ import com.example.cast.CastMediaManager
 import com.example.data.AppSettingsRepository
 import com.example.model.AlarmMode
 import com.example.model.PrayerType
+import com.example.util.AppLogger
+import com.example.util.LogCategory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -129,7 +131,7 @@ class AthanAudioService : Service() {
                 val settings = AppSettingsRepository(applicationContext).settingsFlow.first()
                 if (settings.castEnabled) {
                     val castSound = if (settings.castAlertSound.isNotBlank()) settings.castAlertSound else soundChoice
-                    Log.d(TAG, "Triggering prayer cast: device=${settings.castDeviceName}, sound=$castSound")
+                    AppLogger.i(LogCategory.ALARM, TAG, "Triggering prayer cast: device=${settings.castDeviceName}, sound=$castSound")
                     CastMediaManager.playOnCast(
                         context = applicationContext,
                         soundChoice = castSound,
@@ -139,7 +141,7 @@ class AthanAudioService : Service() {
                     )
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Cast playback initiation error: ${e.message}")
+                AppLogger.w(LogCategory.ALARM, TAG, "Cast playback initiation error: ${e.message}")
             }
         }
 
@@ -148,7 +150,7 @@ class AthanAudioService : Service() {
         castingObserverJob = CoroutineScope(Dispatchers.Main).launch {
             CastMediaManager.isCastingFlow.collect { isCasting ->
                 if (!isCasting && !isLocalAudioPlaying) {
-                    Log.d(TAG, "Both phone audio and cast audio completed. Stopping foreground service.")
+                    AppLogger.i(LogCategory.ALARM, TAG, "Both phone audio and cast audio completed. Stopping foreground service.")
                     stopAlarm()
                     stopSelf()
                 }
@@ -180,12 +182,12 @@ class AthanAudioService : Service() {
                                 setDataSource(fis.fd)
                                 isLooping = false
                                 setOnCompletionListener {
-                                    Log.d(TAG, "Local phone audio completed.")
+                                    AppLogger.i(LogCategory.ALARM, TAG, "Local phone audio completed.")
                                     isLocalAudioPlaying = false
                                     checkCompletionAndStop()
                                 }
                                 setOnErrorListener { _, what, extra ->
-                                    Log.e(TAG, "MediaPlayer error: what=$what extra=$extra")
+                                    AppLogger.e(LogCategory.ALARM, TAG, "MediaPlayer error: what=$what extra=$extra")
                                     isLocalAudioPlaying = false
                                     checkCompletionAndStop()
                                     true
@@ -235,12 +237,12 @@ class AthanAudioService : Service() {
                     setDataSource(applicationContext, audioUri)
                     isLooping = false
                     setOnCompletionListener {
-                        Log.d(TAG, "Local phone audio completed.")
+                        AppLogger.i(LogCategory.ALARM, TAG, "Local phone audio completed.")
                         isLocalAudioPlaying = false
                         checkCompletionAndStop()
                     }
                     setOnErrorListener { _, what, extra ->
-                        Log.e(TAG, "MediaPlayer error: what=$what extra=$extra")
+                        AppLogger.e(LogCategory.ALARM, TAG, "MediaPlayer error: what=$what extra=$extra")
                         isLocalAudioPlaying = false
                         checkCompletionAndStop()
                         true
@@ -249,7 +251,7 @@ class AthanAudioService : Service() {
                     start()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error playing local audio: ${e.message}", e)
+                AppLogger.e(LogCategory.ALARM, TAG, "Error playing local audio: ${e.message}", e)
                 isLocalAudioPlaying = false
                 checkCompletionAndStop()
             }
@@ -260,11 +262,11 @@ class AthanAudioService : Service() {
 
     private fun checkCompletionAndStop() {
         if (!isLocalAudioPlaying && !CastMediaManager.isCastingFlow.value) {
-            Log.d(TAG, "Local audio finished and Cast is not active. Stopping service.")
+            AppLogger.i(LogCategory.ALARM, TAG, "Local audio finished and Cast is not active. Stopping service.")
             stopAlarm()
             stopSelf()
         } else {
-            Log.d(TAG, "Local audio completed, but Cast is still streaming to smart speaker.")
+            AppLogger.i(LogCategory.ALARM, TAG, "Local audio completed, but Cast is still streaming to smart speaker.")
         }
     }
 
@@ -312,7 +314,7 @@ class AthanAudioService : Service() {
             }
             mediaPlayer = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping media player: ${e.message}")
+            AppLogger.e(LogCategory.ALARM, TAG, "Error stopping media player: ${e.message}")
         }
 
         abandonAudioFocus()

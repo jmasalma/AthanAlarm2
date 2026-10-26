@@ -49,7 +49,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import com.example.ui.components.DebugLogsDialog
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -68,6 +70,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -107,6 +111,9 @@ fun SettingsScreen(
     var showPrivacyDialog by remember { mutableStateOf(false) }
     var showCastDeviceDialog by remember { mutableStateOf(false) }
     var showCastSoundDialog by remember { mutableStateOf(false) }
+    var showDebugLogsDialog by remember { mutableStateOf(false) }
+    var tapCount by remember { mutableIntStateOf(0) }
+    var lastTapTimestamp by remember { mutableLongStateOf(0L) }
 
     LazyColumn(
         modifier = Modifier
@@ -116,16 +123,50 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Text(
-                text = "Settings & Calculation",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Configure prayer times rules, sound, and alarms",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Settings & Calculation",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Configure prayer times rules, sound, and alarms",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        val now = System.currentTimeMillis()
+                        if (now - lastTapTimestamp > 2500L) {
+                            tapCount = 1
+                        } else {
+                            tapCount++
+                        }
+                        lastTapTimestamp = now
+                        if (tapCount >= 5) {
+                            tapCount = 0
+                            showDebugLogsDialog = true
+                            Toast.makeText(context, "Diagnostic logs opened", Toast.LENGTH_SHORT).show()
+                        } else if (tapCount >= 3) {
+                            val remaining = 5 - tapCount
+                            Toast.makeText(context, "$remaining taps to open logs", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.testTag("settings_top_icon")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
 
         // Section: Location & Timezone
@@ -577,6 +618,9 @@ fun SettingsScreen(
     }
 
     // Dialogs
+    if (showDebugLogsDialog) {
+        DebugLogsDialog(onDismiss = { showDebugLogsDialog = false })
+    }
     if (showPrivacyDialog) {
         PrivacyPolicyDialog(onDismiss = { showPrivacyDialog = false })
     }

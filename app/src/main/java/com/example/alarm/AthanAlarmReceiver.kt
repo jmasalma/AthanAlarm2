@@ -8,13 +8,14 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.data.AppSettingsRepository
 import com.example.model.AlarmMode
 import com.example.model.PrayerType
+import com.example.util.AppLogger
+import com.example.util.LogCategory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -24,13 +25,13 @@ class AthanAlarmReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "AthanAlarmReceiver"
-        const val PRE_ALERT_CHANNEL_ID = "athan_pre_alert_channel"
-        const val PRE_ALERT_NOTIFICATION_ID = 3001
+        const val PRE_ALERT_CHANNEL_ID = "pre_prayer_alert_channel"
+        const val PRE_ALERT_NOTIFICATION_ID = 2002
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
-        Log.d(TAG, "onReceive triggered with action: $action")
+        AppLogger.i(LogCategory.ALARM, TAG, "Alarm broadcast received with action: $action")
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val wakeLock = powerManager.newWakeLock(
@@ -63,6 +64,7 @@ class AthanAlarmReceiver : BroadcastReceiver() {
             System.currentTimeMillis() + (preMinutes * 60 * 1000L)
         )
 
+        AppLogger.i(LogCategory.ALARM, TAG, "Posting pre-prayer alert notification for $prayerName (~$preMinutes min before)")
         createPreAlertChannel(context)
 
         val openAppIntent = Intent(context, MainActivity::class.java).apply {
@@ -76,7 +78,6 @@ class AthanAlarmReceiver : BroadcastReceiver() {
         )
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
         val notification = NotificationCompat.Builder(context, PRE_ALERT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification_athan)
             .setContentTitle("$prayerName Soon")
@@ -98,6 +99,7 @@ class AthanAlarmReceiver : BroadcastReceiver() {
         val soundChoice = intent.getStringExtra(AthanAlarmScheduler.EXTRA_ATHAN_SOUND) ?: "adhan"
 
         val alarmMode = AlarmMode.entries.firstOrNull { it.name == modeName } ?: AlarmMode.ATHAN
+        AppLogger.i(LogCategory.ALARM, TAG, "Triggering prayer alarm for $prayerName (mode: $alarmMode, sound: $soundChoice)")
 
         // Cancel previous pre-alert notification if showing
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -116,6 +118,8 @@ class AthanAlarmReceiver : BroadcastReceiver() {
             } else {
                 context.startService(serviceIntent)
             }
+        } else {
+            AppLogger.i(LogCategory.ALARM, TAG, "Prayer alarm for $prayerName is MUTED/Disabled")
         }
 
         // Immediately reschedule next prayer alarm
@@ -124,9 +128,10 @@ class AthanAlarmReceiver : BroadcastReceiver() {
             try {
                 val repository = AppSettingsRepository(context)
                 val settings = repository.settingsFlow.first()
-                AthanAlarmScheduler.scheduleNextAlarm(context, settings)
+                val nextInfo = AthanAlarmScheduler.scheduleNextAlarm(context, settings)
+                AppLogger.i(LogCategory.ALARM, TAG, "Rescheduled next alarm for: ${nextInfo?.prayerType} at ${nextInfo?.formattedTime}")
             } catch (e: Exception) {
-                Log.e(TAG, "Error rescheduling next alarm: ${e.message}", e)
+                AppLogger.e(LogCategory.ALARM, TAG, "Error rescheduling next alarm: ${e.message}", e)
             } finally {
                 pendingResult.finish()
             }
@@ -140,10 +145,10 @@ class AthanAlarmReceiver : BroadcastReceiver() {
                 "Pre-Prayer Reminders",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Shows live countdown alerts before prayer times"
+                description = "Countdown alerts 10-30 minutes prior to prayer"
                 enableVibration(true)
             }
-            val manager = context.getSystemService(NotificationManager::class.java)
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
     }
