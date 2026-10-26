@@ -12,9 +12,11 @@ import com.google.android.gms.cast.CastMediaControlIntent
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadOptions
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +34,7 @@ object CastMediaManager {
     private var activeSessionListener: SessionManagerListener<CastSession>? = null
     private var activeDiscoveryCallback: MediaRouter.Callback? = null
     private var connectionTimeoutRunnable: Runnable? = null
+    private var remoteClientCallback: RemoteMediaClient.Callback? = null
 
     fun getCastSelector(): MediaRouteSelector {
         return MediaRouteSelector.Builder()
@@ -163,7 +166,7 @@ object CastMediaManager {
                     pendingMediaInfo = mediaInfo
                     attachSessionListener(castContext, onStarted, onError)
 
-                    // Crucial: if already set to this route in MediaRouter, unselect first to trigger fresh session
+                    // If already set to this route in MediaRouter, unselect first to trigger fresh session
                     if (mediaRouter.selectedRoute.id == targetRoute.id) {
                         Log.d(TAG, "Route already selected in MediaRouter; unselecting to trigger reconnection")
                         mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
@@ -185,7 +188,13 @@ object CastMediaManager {
                         }
 
                         private fun checkAndSelect(route: MediaRouter.RouteInfo) {
-                            if (!route.isDefault && (targetIds.contains(route.id) || targetNames.any { route.name.equals(it, ignoreCase = true) } || route.matchesSelector(selector))) {
+                            val matchesTarget = if (targetIds.isNotEmpty() || targetNames.isNotEmpty()) {
+                                targetIds.contains(route.id) || targetNames.any { route.name.equals(it, ignoreCase = true) }
+                            } else {
+                                route.matchesSelector(selector)
+                            }
+
+                            if (!route.isDefault && matchesTarget) {
                                 scanListener?.let { mediaRouter.removeCallback(it) }
                                 if (mediaRouter.selectedRoute.id == route.id) {
                                     mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
@@ -199,7 +208,7 @@ object CastMediaManager {
                     mediaRouter.addCallback(selector, scanListener, MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN)
                     mainHandler.postDelayed({
                         scanListener.let { mediaRouter.removeCallback(it) }
-                    }, 5000L)
+                    }, 8000L)
 
                     startTimeoutWatchdog(castContext, targetDeviceName ?: "Google Cast speaker", onError)
                 } else {
@@ -246,6 +255,23 @@ object CastMediaManager {
             return
         }
 
+        // Attach completion callback to monitor when cast audio ends
+        remoteClientCallback?.let { remoteClient.unregisterCallback(it) }
+        val callback = object : RemoteMediaClient.Callback() {
+            override fun onStatusUpdated() {
+                val status = remoteClient.mediaStatus
+                if (status != null) {
+                    val playerState = status.playerState
+                    if (playerState == MediaStatus.PLAYER_STATE_IDLE && status.idleReason != MediaStatus.IDLE_REASON_NONE) {
+                        Log.d(TAG, "Remote media client completed/idle (reason=${status.idleReason}).")
+                        _isCastingFlow.value = false
+                    }
+                }
+            }
+        }
+        remoteClientCallback = callback
+        remoteClient.registerCallback(callback)
+
         val options = MediaLoadOptions.Builder()
             .setAutoplay(true)
             .setPlayPosition(0)
@@ -259,6 +285,7 @@ object CastMediaManager {
                 onStarted?.invoke()
             } else {
                 Log.w(TAG, "Cast media load failed with status: ${result.status.statusCode}")
+                _isCastingFlow.value = false
                 onError?.invoke("Cast speaker playback error (code: ${result.status.statusCode})")
             }
         }
@@ -347,10 +374,14 @@ object CastMediaManager {
                 } catch (_: Exception) {
                     null
                 }
-                castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
+                castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.let { client ->
+                    remoteClientCallback?.let { client.unregisterCallback(it) }
+                    client.stop()
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Error stopping remote media client: ${e.message}")
             } finally {
+                remoteClientCallback = null
                 localHttpServer.stop()
                 _isCastingFlow.value = false
                 pendingMediaInfo = null
