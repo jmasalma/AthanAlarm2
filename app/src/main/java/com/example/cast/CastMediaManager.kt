@@ -1,6 +1,7 @@
 package com.example.cast
 
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import androidx.mediarouter.media.MediaControlIntent
@@ -39,6 +40,53 @@ object CastMediaManager {
     private var activeDiscoveryCallback: MediaRouter.Callback? = null
     private var connectionTimeoutRunnable: Runnable? = null
     private var remoteClientCallback: RemoteMediaClient.Callback? = null
+    private var activePollRunnable: Runnable? = null
+
+    private var multicastLock: WifiManager.MulticastLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    private fun acquireLocks(context: Context) {
+        try {
+            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            if (multicastLock == null) {
+                multicastLock = wifiManager?.createMulticastLock("CastMediaManager::MulticastLock")?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (multicastLock?.isHeld != true) {
+                multicastLock?.acquire()
+                AppLogger.i(LogCategory.CAST, TAG, "Cast MulticastLock acquired: isHeld=${multicastLock?.isHeld}")
+            }
+
+            if (wifiLock == null) {
+                @Suppress("DEPRECATION")
+                wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "CastMediaManager::WifiLock")?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wifiLock?.isHeld != true) {
+                wifiLock?.acquire()
+                AppLogger.i(LogCategory.CAST, TAG, "Cast WifiLock acquired: isHeld=${wifiLock?.isHeld}")
+            }
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.CAST, TAG, "Error acquiring Cast locks: ${e.message}")
+        }
+    }
+
+    private fun releaseLocks() {
+        try {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+                AppLogger.i(LogCategory.CAST, TAG, "Cast MulticastLock released")
+            }
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+                AppLogger.i(LogCategory.CAST, TAG, "Cast WifiLock released")
+            }
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.CAST, TAG, "Error releasing Cast locks: ${e.message}")
+        }
+    }
 
     fun getCastSelector(): MediaRouteSelector {
         return MediaRouteSelector.Builder()
@@ -56,19 +104,29 @@ object CastMediaManager {
      * Ensures background route discovery is active so routes don't disappear when dialogs close.
      */
     fun startDiscovery(context: Context) {
+        acquireLocks(context)
         mainHandler.post {
             try {
                 val mediaRouter = MediaRouter.getInstance(context)
-                val selector = getCastSelector()
+                val castContext = try { CastContext.getSharedInstance(context) } catch (_: Exception) { null }
+                val selector = castContext?.mergedSelector ?: getCastSelector()
+
                 if (activeDiscoveryCallback == null) {
                     val cb = object : MediaRouter.Callback() {
                         override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
                             AppLogger.i(LogCategory.CAST, TAG, "Route discovered: ${route.name} (ID: ${route.id})")
                         }
+                        override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                            AppLogger.i(LogCategory.CAST, TAG, "Route changed: ${route.name} (ID: ${route.id})")
+                        }
                     }
                     activeDiscoveryCallback = cb
-                    mediaRouter.addCallback(selector, cb, MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY)
-                    AppLogger.i(LogCategory.CAST, TAG, "Background route discovery started")
+                    mediaRouter.addCallback(
+                        selector,
+                        cb,
+                        MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY or MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN
+                    )
+                    AppLogger.i(LogCategory.CAST, TAG, "Background route discovery started with active scan flags")
                 }
             } catch (e: Exception) {
                 AppLogger.w(LogCategory.CAST, TAG, "startDiscovery failed: ${e.message}")
@@ -113,7 +171,13 @@ object CastMediaManager {
     ) {
         _isCastingFlow.value = true
         isSessionConnected = false
-        AppLogger.i(LogCategory.CAST, TAG, "playOnCast requested: sound=$soundChoice, prayer=$prayerType, targetId=$targetDeviceId, targetName=$targetDeviceName")
+        acquireLocks(context)
+
+        AppLogger.i(
+            LogCategory.CAST,
+            TAG,
+            "playOnCast requested: sound=$soundChoice, prayer=$prayerType, targetId=$targetDeviceId, targetName=$targetDeviceName"
+        )
         val resolved = AudioStreamResolver.resolveAudioData(context, soundChoice, prayerType)
         val streamUrl = localHttpServer.startWithBytes(resolved.bytes, resolved.mimeType, context)
         AppLogger.i(LogCategory.CAST, TAG, "Local HTTP audio stream URL ready: $streamUrl (${resolved.bytes.size} bytes)")
@@ -159,10 +223,18 @@ object CastMediaManager {
                 }
 
                 val mediaRouter = MediaRouter.getInstance(context)
-                val selector = getCastSelector()
+                val selector = castContext?.mergedSelector ?: getCastSelector()
 
                 // Keep active scan running so routes are resolved
                 startDiscovery(context)
+
+                val initialRoutes = mediaRouter.routes
+                val nonDefaultInitial = initialRoutes.filter { !it.isDefault }
+                AppLogger.i(
+                    LogCategory.CAST,
+                    TAG,
+                    "MediaRouter initial cache: total=${initialRoutes.size}, nonDefault=${nonDefaultInitial.size}: ${nonDefaultInitial.map { "${it.name}(${it.id})" }}"
+                )
 
                 val isRouteTargetMatch: (MediaRouter.RouteInfo) -> Boolean = { route ->
                     if (targetIds.isNotEmpty() || targetNames.isNotEmpty()) {
@@ -176,72 +248,131 @@ object CastMediaManager {
 
                 // 2. Find target route
                 val findTargetRoute: () -> MediaRouter.RouteInfo? = {
-                    mediaRouter.routes.firstOrNull { isRouteTargetMatch(it) }
+                    mediaRouter.routes.firstOrNull { !it.isDefault && isRouteTargetMatch(it) }
                         ?: mediaRouter.routes.firstOrNull { !it.isDefault && it.matchesSelector(selector) }
                 }
 
                 val targetRoute = findTargetRoute()
 
                 if (targetRoute != null && castContext != null) {
-                    AppLogger.i(LogCategory.CAST, TAG, "Found target route: ${targetRoute.name} (${targetRoute.id}). Initiating session...")
+                    AppLogger.i(LogCategory.CAST, TAG, "Found target route in initial cache: ${targetRoute.name} (${targetRoute.id}). Initiating session...")
                     pendingMediaInfo = mediaInfo
                     attachSessionListener(castContext, onStarted, onError)
 
                     if (mediaRouter.selectedRoute.id == targetRoute.id) {
-                        AppLogger.i(LogCategory.CAST, TAG, "Route already selected in MediaRouter; unselecting to force reconnection")
+                        AppLogger.i(LogCategory.CAST, TAG, "Route already selected in MediaRouter; resetting to re-establish session")
                         mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
                         mainHandler.postDelayed({
                             mediaRouter.selectRoute(targetRoute)
-                        }, 100L)
+                        }, 150L)
                     } else {
                         mediaRouter.selectRoute(targetRoute)
                     }
                     startTimeoutWatchdog(castContext, targetRoute.name, onError)
                 } else if (castContext != null) {
-                    AppLogger.i(LogCategory.CAST, TAG, "Target route not immediately in cache. Starting active scan...")
+                    AppLogger.i(LogCategory.CAST, TAG, "Target route not in initial cache. Starting active scan with callbacks & periodic polling...")
                     pendingMediaInfo = mediaInfo
                     attachSessionListener(castContext, onStarted, onError)
 
                     var scanListener: MediaRouter.Callback? = null
+                    var pollRunnable: Runnable? = null
+                    var pollCount = 0
+
+                    val cleanupScan = {
+                        scanListener?.let {
+                            try { mediaRouter.removeCallback(it) } catch (_: Exception) {}
+                            scanListener = null
+                        }
+                        pollRunnable?.let {
+                            mainHandler.removeCallbacks(it)
+                            pollRunnable = null
+                        }
+                        activePollRunnable = null
+                    }
+
+                    val selectMatchingRoute: (MediaRouter.RouteInfo) -> Unit = { route ->
+                        AppLogger.i(LogCategory.CAST, TAG, "Selecting discovered target route: ${route.name} (${route.id})")
+                        cleanupScan()
+                        if (mediaRouter.selectedRoute.id == route.id) {
+                            mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
+                            mainHandler.postDelayed({
+                                mediaRouter.selectRoute(route)
+                            }, 150L)
+                        } else {
+                            mediaRouter.selectRoute(route)
+                        }
+                        startTimeoutWatchdog(castContext, route.name, onError)
+                    }
+
                     scanListener = object : MediaRouter.Callback() {
                         override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                            checkAndSelect(route)
-                        }
-                        override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                            checkAndSelect(route)
+                            AppLogger.i(LogCategory.CAST, TAG, "onRouteAdded: ${route.name} (${route.id})")
+                            if (!route.isDefault && isRouteTargetMatch(route)) {
+                                selectMatchingRoute(route)
+                            }
                         }
 
-                        private fun checkAndSelect(route: MediaRouter.RouteInfo) {
+                        override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                            AppLogger.i(LogCategory.CAST, TAG, "onRouteChanged: ${route.name} (${route.id})")
                             if (!route.isDefault && isRouteTargetMatch(route)) {
-                                AppLogger.i(LogCategory.CAST, TAG, "Discovered matching route during active scan: ${route.name}")
-                                scanListener?.let { mediaRouter.removeCallback(it) }
-                                if (mediaRouter.selectedRoute.id == route.id) {
-                                    mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
-                                    mainHandler.postDelayed({
-                                        mediaRouter.selectRoute(route)
-                                    }, 100L)
-                                } else {
-                                    mediaRouter.selectRoute(route)
-                                }
-                                startTimeoutWatchdog(castContext, route.name, onError)
+                                selectMatchingRoute(route)
                             }
                         }
                     }
 
-                    mediaRouter.addCallback(selector, scanListener, MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN)
-                    mainHandler.postDelayed({
-                        scanListener.let { mediaRouter.removeCallback(it) }
-                    }, 10000L)
+                    mediaRouter.addCallback(
+                        selector,
+                        scanListener!!,
+                        MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN or
+                                MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY or
+                                MediaRouter.CALLBACK_FLAG_UNFILTERED_EVENTS
+                    )
+
+                    // Periodic 500ms polling safeguard
+                    pollRunnable = object : Runnable {
+                        override fun run() {
+                            if (isSessionConnected || !_isCastingFlow.value) {
+                                cleanupScan()
+                                return
+                            }
+                            pollCount++
+                            val currentNonDefault = mediaRouter.routes.filter { !it.isDefault }
+                            val match = currentNonDefault.firstOrNull { isRouteTargetMatch(it) }
+                            if (match != null) {
+                                AppLogger.i(LogCategory.CAST, TAG, "Periodic scan found matching route at tick #$pollCount (${pollCount * 500}ms): ${match.name}")
+                                selectMatchingRoute(match)
+                                return
+                            }
+
+                            if (pollCount % 4 == 0) { // Log every 2 seconds
+                                AppLogger.i(
+                                    LogCategory.CAST,
+                                    TAG,
+                                    "Active scan tick #$pollCount (${pollCount * 500}ms): discovered ${currentNonDefault.size} routes: ${currentNonDefault.map { it.name }}"
+                                )
+                            }
+
+                            if (pollCount < 40) { // 20s max polling
+                                mainHandler.postDelayed(this, 500L)
+                            } else {
+                                cleanupScan()
+                            }
+                        }
+                    }
+                    activePollRunnable = pollRunnable
+                    mainHandler.postDelayed(pollRunnable!!, 500L)
 
                     startTimeoutWatchdog(castContext, targetDeviceName ?: "Google Cast speaker", onError)
                 } else {
                     AppLogger.e(LogCategory.CAST, TAG, "CastContext is null; Google Play Services Cast unavailable")
                     _isCastingFlow.value = false
+                    releaseLocks()
                     onError?.invoke("Google Cast service is not available on this device.")
                 }
             } catch (e: Exception) {
                 AppLogger.e(LogCategory.CAST, TAG, "Exception in playOnCast: ${e.message}", e)
                 _isCastingFlow.value = false
+                releaseLocks()
                 onError?.invoke(e.message ?: "Failed to initiate casting")
             }
         }
@@ -251,15 +382,16 @@ object CastMediaManager {
         cancelTimeoutWatchdog()
         val watchdog = Runnable {
             if (!isSessionConnected) {
-                AppLogger.w(LogCategory.CAST, TAG, "Cast session connection timed out for: $deviceName")
+                AppLogger.w(LogCategory.CAST, TAG, "Cast session connection timed out (20s) for: $deviceName")
                 detachSessionListener(castContext)
                 pendingMediaInfo = null
                 _isCastingFlow.value = false
+                releaseLocks()
                 onError?.invoke("Could not connect to $deviceName. Please check that it is powered on and on the same Wi-Fi.")
             }
         }
         connectionTimeoutRunnable = watchdog
-        mainHandler.postDelayed(watchdog, 12000L)
+        mainHandler.postDelayed(watchdog, 20000L)
     }
 
     private fun cancelTimeoutWatchdog() {
@@ -406,6 +538,8 @@ object CastMediaManager {
      */
     fun stopCast(context: Context) {
         cancelTimeoutWatchdog()
+        activePollRunnable?.let { mainHandler.removeCallbacks(it) }
+        activePollRunnable = null
         mainHandler.post {
             try {
                 AppLogger.i(LogCategory.CAST, TAG, "stopCast called")
@@ -426,6 +560,7 @@ object CastMediaManager {
                 isSessionConnected = false
                 _isCastingFlow.value = false
                 pendingMediaInfo = null
+                releaseLocks()
             }
         }
     }

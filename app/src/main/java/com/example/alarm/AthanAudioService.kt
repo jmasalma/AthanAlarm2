@@ -41,6 +41,7 @@ class AthanAudioService : Service() {
     private var mediaPlayer: MediaPlayer? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
 
@@ -86,6 +87,10 @@ class AthanAudioService : Service() {
         )?.apply {
             setReferenceCounted(false)
         }
+
+        multicastLock = wifiManager?.createMulticastLock("AthanAlarm::CastMulticastLock")?.apply {
+            setReferenceCounted(false)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -125,6 +130,12 @@ class AthanAudioService : Service() {
     private fun handleAlarmPlayback(soundChoice: String, alarmMode: AlarmMode, prayerType: PrayerType) {
         wakeLock?.acquire(5 * 60 * 1000L) // 5 minutes safety timeout
         wifiLock?.acquire()
+        try {
+            multicastLock?.acquire()
+            AppLogger.i(LogCategory.ALARM, TAG, "MulticastLock acquired: isHeld=${multicastLock?.isHeld}")
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.ALARM, TAG, "Could not acquire MulticastLock: ${e.message}")
+        }
 
         serviceScope.launch {
             try {
@@ -364,6 +375,10 @@ class AthanAudioService : Service() {
 
     private fun releaseLocks() {
         try {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+                AppLogger.i(LogCategory.ALARM, TAG, "MulticastLock released")
+            }
             if (wifiLock?.isHeld == true) {
                 wifiLock?.release()
             }
