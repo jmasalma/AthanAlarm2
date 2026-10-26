@@ -1,6 +1,7 @@
 package com.example.cast
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
 import android.util.Log
 import java.io.InputStream
@@ -29,14 +30,38 @@ class LocalHttpAudioServer {
         private const val TAG = "LocalHttpAudioServer"
 
         /**
-         * Resolves the device's local Wi-Fi IPv4 address, prioritizing Wi-Fi/Ethernet
-         * and private local subnets over mobile cellular (rmnet/CGNAT) interfaces.
+         * Resolves the device's local Wi-Fi IPv4 address, prioritizing ConnectivityManager
+         * active network link addresses, then Wi-Fi interfaces over mobile cellular (rmnet/CGNAT).
          */
         fun getLocalIpAddress(context: Context? = null): String {
-            // 1. Try WifiManager first if Context is available
+            // 1. Try ConnectivityManager active network first (zero permissions needed, 100% reliable)
+            if (context != null) {
+                try {
+                    val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    val activeNetwork = cm?.activeNetwork
+                    if (activeNetwork != null) {
+                        val linkProperties = cm.getLinkProperties(activeNetwork)
+                        for (linkAddress in linkProperties?.linkAddresses ?: emptyList()) {
+                            val addr = linkAddress.address
+                            if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                                val host = addr.hostAddress
+                                if (!host.isNullOrBlank() && host != "127.0.0.1") {
+                                    Log.d(TAG, "Resolved IP via ConnectivityManager active network: $host")
+                                    return host
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "ConnectivityManager lookup failed: ${e.message}")
+                }
+            }
+
+            // 2. Try WifiManager
             if (context != null) {
                 try {
                     val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                    @Suppress("DEPRECATION")
                     val ipInt = wifiManager?.connectionInfo?.ipAddress ?: 0
                     if (ipInt != 0) {
                         val ip = String.format(
@@ -48,7 +73,7 @@ class LocalHttpAudioServer {
                             ipInt shr 24 and 0xff
                         )
                         if (ip != "0.0.0.0" && ip != "127.0.0.1") {
-                            Log.d(TAG, "Resolved Wi-Fi IP via WifiManager: $ip")
+                            Log.d(TAG, "Resolved IP via WifiManager: $ip")
                             return ip
                         }
                     }
@@ -57,7 +82,7 @@ class LocalHttpAudioServer {
                 }
             }
 
-            // 2. Iterate network interfaces, prioritizing wlan and eth
+            // 3. Iterate network interfaces, prioritizing wlan and eth
             try {
                 val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
                 val sortedInterfaces = interfaces.sortedByDescending {
@@ -79,7 +104,6 @@ class LocalHttpAudioServer {
                         if (!addr.isLoopbackAddress && addr is Inet4Address) {
                             val host = addr.hostAddress ?: continue
                             if (!host.contains(':') && host != "127.0.0.1") {
-                                // Prefer Wi-Fi/Ethernet or RFC1918 private IPv4 subnets
                                 if (intf.name.startsWith("wlan") || intf.name.startsWith("eth") ||
                                     host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")
                                 ) {
@@ -106,7 +130,7 @@ class LocalHttpAudioServer {
         stop()
 
         this.audioData = bytes
-        this.contentType = mimeType
+        this.contentType = if (mimeType.isNotBlank()) mimeType else "audio/mpeg"
 
         val socket = ServerSocket(0)
         this.serverSocket = socket
@@ -118,9 +142,9 @@ class LocalHttpAudioServer {
         }
 
         val ip = getLocalIpAddress(context)
-        val ext = if (mimeType.contains("wav")) "wav" else "mp3"
+        val ext = if (contentType.contains("wav")) "wav" else "mp3"
         val url = "http://$ip:$port/athan.$ext"
-        Log.d(TAG, "Server started at $url (Bytes: ${bytes.size}, Mime: $mimeType)")
+        Log.d(TAG, "Server started at $url (Bytes: ${bytes.size}, Content-Type: $contentType)")
         return url
     }
 
@@ -262,12 +286,26 @@ class LocalHttpAudioServer {
     }
 
     private fun handleRangeRequest(rangeHeader: String, data: ByteArray, totalLength: Long, output: OutputStream) {
-        // e.g. "Range: bytes=0-" or "Range: bytes=0-1024"
         val rangeStr = rangeHeader.substringAfter("bytes=").trim()
-        val parts = rangeStr.split("-")
-        val start = parts.getOrNull(0)?.toLongOrNull() ?: 0L
-        val parsedEnd = if (parts.size > 1 && parts[1].isNotBlank()) parts[1].toLongOrNull() else null
-        val end = (parsedEnd ?: (totalLength - 1)).coerceAtMost(totalLength - 1)
+        val rangeParts = rangeStr.split("-")
+        val (start, end) = when {
+            rangeParts[0].isEmpty() && rangeParts.size > 1 -> {
+                // Suffix range: bytes=-500
+                val suffix = rangeParts[1].toLongOrNull() ?: 0L
+                val s = (totalLength - suffix).coerceAtLeast(0L)
+                Pair(s, totalLength - 1)
+            }
+            rangeParts.size > 1 && rangeParts[1].isNotEmpty() -> {
+                val s = rangeParts[0].toLongOrNull() ?: 0L
+                val e = (rangeParts[1].toLongOrNull() ?: (totalLength - 1)).coerceAtMost(totalLength - 1)
+                Pair(s, e)
+            }
+            else -> {
+                val s = rangeParts[0].toLongOrNull() ?: 0L
+                Pair(s, totalLength - 1)
+            }
+        }
+
         val rangeLength = (end - start + 1).coerceAtLeast(0)
 
         val header = StringBuilder()

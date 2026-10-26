@@ -12,7 +12,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.io.ByteArrayInputStream
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -24,7 +23,7 @@ class AudioStreamResolverTest {
         val resolved = AudioStreamResolver.resolveAudio(context, "chime")
 
         assertEquals("Gentle Chime", resolved.title)
-        assertEquals("audio/wav", resolved.mimeType)
+        assertEquals("audio/mpeg", resolved.mimeType)
         val stream = resolved.streamSupplier.invoke()
         assertNotNull(stream)
         stream?.close()
@@ -46,6 +45,18 @@ class AudioStreamResolverTest {
         val streamFajr = resolvedFajr.streamSupplier.invoke()
         assertNotNull(streamFajr)
         streamFajr?.close()
+    }
+
+    @Test
+    fun testResolveSystemNotificationAndAlarm() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val resolvedNotif = AudioStreamResolver.resolveAudio(context, "system_notification")
+        assertEquals("System Notification", resolvedNotif.title)
+        assertEquals("audio/mpeg", resolvedNotif.mimeType)
+
+        val resolvedAlarm = AudioStreamResolver.resolveAudio(context, "system_alarm")
+        assertEquals("System Alarm", resolvedAlarm.title)
+        assertEquals("audio/mpeg", resolvedAlarm.mimeType)
     }
 
     @Test

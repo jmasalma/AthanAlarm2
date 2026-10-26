@@ -1,6 +1,7 @@
 package com.example.cast
 
 import android.content.Context
+import android.media.RingtoneManager
 import android.net.Uri
 import android.util.Log
 import com.example.R
@@ -21,8 +22,8 @@ object AudioStreamResolver {
 
     data class ResolvedAudioData(
         val bytes: ByteArray,
-        val mimeType: String,
-        val title: String
+        val mimeType: String = "audio/mpeg",
+        val title: String = "Athan"
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -40,6 +41,7 @@ object AudioStreamResolver {
     }
 
     fun resolveAudioData(context: Context, soundChoice: String, prayerType: PrayerType = PrayerType.DHUHR): ResolvedAudioData {
+        // 1. Custom MP3 File
         val customFilePath = when {
             soundChoice.startsWith("custom_file:") -> soundChoice.removePrefix("custom_file:")
             soundChoice.startsWith("file://") -> Uri.parse(soundChoice).path
@@ -50,25 +52,29 @@ object AudioStreamResolver {
             if (file.exists()) {
                 try {
                     val bytes = file.readBytes()
-                    return ResolvedAudioData(
-                        bytes = bytes,
-                        mimeType = "audio/mpeg",
-                        title = "Custom Audio"
-                    )
+                    if (bytes.isNotEmpty()) {
+                        return ResolvedAudioData(
+                            bytes = bytes,
+                            mimeType = "audio/mpeg",
+                            title = "Custom Audio"
+                        )
+                    }
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed reading custom file: ${e.message}")
                 }
             }
         }
 
+        // 2. Custom Content URI (from picker)
         if (soundChoice.startsWith("content://")) {
             val uri = Uri.parse(soundChoice)
             try {
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 if (bytes != null && bytes.isNotEmpty()) {
+                    val detectedMime = context.contentResolver.getType(uri) ?: "audio/mpeg"
                     return ResolvedAudioData(
                         bytes = bytes,
-                        mimeType = "audio/mpeg",
+                        mimeType = if (detectedMime.startsWith("audio/")) detectedMime else "audio/mpeg",
                         title = "Custom Audio"
                     )
                 }
@@ -77,26 +83,92 @@ object AudioStreamResolver {
             }
         }
 
+        // 3. Gentle Ding / Chime (converted to MP3 for universal Google Cast compatibility)
         if (soundChoice == "chime") {
             try {
                 val bytes = context.resources.openRawResource(R.raw.athan_chime).use { it.readBytes() }
-                return ResolvedAudioData(
-                    bytes = bytes,
-                    mimeType = "audio/wav",
-                    title = "Gentle Chime"
-                )
+                if (bytes.isNotEmpty()) {
+                    return ResolvedAudioData(
+                        bytes = bytes,
+                        mimeType = "audio/mpeg",
+                        title = "Gentle Chime"
+                    )
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed reading chime: ${e.message}")
+                Log.w(TAG, "Failed reading chime resource: ${e.message}")
             }
         }
 
+        // 4. System Notification Sound
+        if (soundChoice == "system_notification") {
+            try {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                val bytes = if (uri != null) {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } else null
+
+                if (bytes != null && bytes.isNotEmpty()) {
+                    return ResolvedAudioData(
+                        bytes = bytes,
+                        mimeType = "audio/mpeg",
+                        title = "System Notification"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed reading system notification sound: ${e.message}")
+            }
+
+            // Fallback to chime if system notification stream is restricted
+            val fallbackBytes = try {
+                context.resources.openRawResource(R.raw.athan_chime).use { it.readBytes() }
+            } catch (_: Exception) { ByteArray(0) }
+            return ResolvedAudioData(
+                bytes = fallbackBytes,
+                mimeType = "audio/mpeg",
+                title = "System Notification"
+            )
+        }
+
+        // 5. System Alarm Ringtone
+        if (soundChoice == "system_alarm") {
+            try {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val bytes = if (uri != null) {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } else null
+
+                if (bytes != null && bytes.isNotEmpty()) {
+                    return ResolvedAudioData(
+                        bytes = bytes,
+                        mimeType = "audio/mpeg",
+                        title = "System Alarm"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed reading system alarm ringtone: ${e.message}")
+            }
+
+            // Fallback to athan
+            val fallbackBytes = try {
+                context.resources.openRawResource(R.raw.athan_general).use { it.readBytes() }
+            } catch (_: Exception) { ByteArray(0) }
+            return ResolvedAudioData(
+                bytes = fallbackBytes,
+                mimeType = "audio/mpeg",
+                title = "System Alarm"
+            )
+        }
+
+        // 6. Full Athan (Fajr or General)
         val resId = if (prayerType == PrayerType.FAJR || prayerType == PrayerType.NEXT_FAJR) {
             R.raw.athan_fajr
         } else {
             R.raw.athan_general
         }
 
-        val bytes = try {
+        val athanBytes = try {
             context.resources.openRawResource(resId).use { it.readBytes() }
         } catch (e: Exception) {
             Log.e(TAG, "Failed reading bundled athan: ${e.message}", e)
@@ -104,7 +176,7 @@ object AudioStreamResolver {
         }
 
         return ResolvedAudioData(
-            bytes = bytes,
+            bytes = athanBytes,
             mimeType = "audio/mpeg",
             title = "Athan"
         )

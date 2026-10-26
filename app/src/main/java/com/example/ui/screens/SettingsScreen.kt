@@ -330,6 +330,7 @@ fun SettingsScreen(
                             onCheckedChange = { enabled ->
                                 viewModel.updateCastEnabled(enabled)
                                 if (enabled) {
+                                    com.example.cast.CastMediaManager.startDiscovery(context)
                                     showCastDeviceDialog = true
                                 }
                             },
@@ -354,7 +355,30 @@ fun SettingsScreen(
                         val castSoundSubtitle = when {
                             uiState.settings.castAlertSound == "chime" -> "Gentle Ding / Chime"
                             uiState.settings.castAlertSound == "adhan" || uiState.settings.castAlertSound == "athan" -> "Athan"
-                            uiState.settings.castAlertSound.startsWith("custom_file:") || uiState.settings.castAlertSound.startsWith("content://") -> "Custom Audio"
+                            uiState.settings.castAlertSound == "system_notification" -> "System Notification Sound (Ding/Ping)"
+                            uiState.settings.castAlertSound == "system_alarm" -> "System Alarm Ringtone"
+                            uiState.settings.castAlertSound.startsWith("custom_file:") || uiState.settings.castAlertSound.startsWith("file://") -> {
+                                val path = if (uiState.settings.castAlertSound.startsWith("custom_file:")) {
+                                    uiState.settings.castAlertSound.removePrefix("custom_file:")
+                                } else {
+                                    Uri.parse(uiState.settings.castAlertSound).path ?: ""
+                                }
+                                val rawName = File(path).name
+                                val originalName = if (rawName.startsWith("custom_") && rawName.indexOf('_', 7) != -1) {
+                                    rawName.substring(rawName.indexOf('_', 7) + 1)
+                                } else {
+                                    rawName
+                                }
+                                "Custom MP3: $originalName"
+                            }
+                            uiState.settings.castAlertSound.startsWith("content://") -> {
+                                try {
+                                    val title = RingtoneManager.getRingtone(context, Uri.parse(uiState.settings.castAlertSound))?.getTitle(context)
+                                    if (!title.isNullOrBlank()) "System: $title" else "Custom Audio"
+                                } catch (_: Exception) {
+                                    "Custom Audio"
+                                }
+                            }
                             else -> "Athan"
                         }
 
