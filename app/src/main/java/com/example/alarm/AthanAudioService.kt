@@ -56,6 +56,8 @@ class AthanAudioService : Service() {
         private const val TAG = "AthanAudioService"
         const val CHANNEL_ID = "athan_alarm_channel"
         const val NOTIFICATION_ID = 2001
+        const val PERSISTENT_CHANNEL_ID = "athan_prayer_notification_channel_v2"
+        const val PRAYER_PERSISTENT_NOTIFICATION_ID = 2005
 
         const val ACTION_START_ALARM = "com.aistudio.athanalarm.START_ALARM"
         const val ACTION_STOP_SERVICE = "com.aistudio.athanalarm.STOP_SERVICE"
@@ -127,6 +129,10 @@ class AthanAudioService : Service() {
                 val alarmMode = AlarmMode.entries.firstOrNull { it.name == modeName } ?: AlarmMode.ATHAN
                 currentPrayerType = prayerType
 
+                // Post persistent dismissible notification immediately so user sees and hears the alert
+                val shouldChime = (alarmMode == AlarmMode.SILENT || alarmMode == AlarmMode.BEEP)
+                showPersistentPrayerNotification(applicationContext, prayerType, playAlertSound = shouldChime)
+
                 startForeground(NOTIFICATION_ID, buildNotification(prayerType, alarmMode))
 
                 if (alarmMode != AlarmMode.MUTED) {
@@ -160,7 +166,9 @@ class AthanAudioService : Service() {
                 )
 
                 if (!isCastEnabled && !isPhoneAudioEnabled) {
-                    AppLogger.i(LogCategory.ALARM, TAG, "Silent mode with Cast disabled. Notification active.")
+                    AppLogger.i(LogCategory.ALARM, TAG, "Silent mode with Cast disabled. Persistent notification active. Stopping foreground service.")
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
                     releaseLocks()
                     return@launch
                 }
@@ -392,7 +400,7 @@ class AthanAudioService : Service() {
         abandonAudioFocus()
         CastMediaManager.stopCast(applicationContext)
         releaseLocks()
-        showPersistentPrayerNotification(applicationContext, currentPrayerType)
+        showPersistentPrayerNotification(applicationContext, currentPrayerType, playAlertSound = false)
     }
 
     private fun releaseLocks() {
@@ -488,7 +496,11 @@ class AthanAudioService : Service() {
             .build()
     }
 
-    private fun showPersistentPrayerNotification(context: Context, prayerType: PrayerType) {
+    private fun showPersistentPrayerNotification(
+        context: Context,
+        prayerType: PrayerType,
+        playAlertSound: Boolean = true
+    ) {
         val openAppIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -504,7 +516,7 @@ class AthanAudioService : Service() {
         val text = "It is time for $prayerDisplayName"
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, PERSISTENT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification_athan)
             .setContentTitle(title)
             .setContentText(text)
@@ -514,25 +526,57 @@ class AthanAudioService : Service() {
             .setContentIntent(openAppPendingIntent)
             .setAutoCancel(true)
             .setOngoing(false)
-            .build()
 
-        notificationManager.notify(NOTIFICATION_ID, notification)
+        if (playAlertSound) {
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            builder.setSound(soundUri)
+            builder.setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+        }
+
+        notificationManager.notify(PRAYER_PERSISTENT_NOTIFICATION_ID, builder.build())
+        AppLogger.i(
+            LogCategory.ALARM,
+            TAG,
+            "Posted persistent notification for $prayerDisplayName (id=$PRAYER_PERSISTENT_NOTIFICATION_ID, sound=$playAlertSound)"
+        )
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            val playbackChannel = NotificationChannel(
                 CHANNEL_ID,
-                "Athan Prayer Alarm",
+                "Athan Audio Playback",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Plays the Athan when it is time to pray"
+                description = "Foreground playback controls when Athan or Cast is playing"
                 setSound(null, null) // Audio handled by MediaPlayer / Cast
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+            manager.createNotificationChannel(playbackChannel)
+
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            val persistentChannel = NotificationChannel(
+                PERSISTENT_CHANNEL_ID,
+                "Prayer Notifications",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alert notifications when prayer time arrives"
+                setSound(
+                    soundUri,
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
                 enableVibration(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(persistentChannel)
         }
     }
 

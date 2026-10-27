@@ -42,6 +42,8 @@ object CastMediaManager {
     private var connectionTimeoutRunnable: Runnable? = null
     private var remoteClientCallback: RemoteMediaClient.Callback? = null
     private var activePollRunnable: Runnable? = null
+    @Volatile
+    private var hasInitiatedSelection = false
 
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -245,6 +247,7 @@ object CastMediaManager {
     ) {
         _isCastingFlow.value = true
         isSessionConnected = false
+        hasInitiatedSelection = false
         acquireLocks(context)
 
         AppLogger.i(
@@ -339,6 +342,7 @@ object CastMediaManager {
 
                 if (targetRoute != null && castContext != null) {
                     AppLogger.i(LogCategory.CAST, TAG, "Found target route in initial cache: ${targetRoute.name} (${targetRoute.id}). Initiating session...")
+                    hasInitiatedSelection = true
                     pendingMediaInfo = mediaInfo
                     attachSessionListener(castContext, onStarted, onError)
                     triggerRouteSelection(mediaRouter, selector, targetRoute)
@@ -353,28 +357,33 @@ object CastMediaManager {
                     var pollCount = 0
 
                     val selectMatchingRoute: (MediaRouter.RouteInfo) -> Unit = { route ->
-                        AppLogger.i(LogCategory.CAST, TAG, "Selecting discovered target route: ${route.name} (${route.id})")
-                        // Stop polling runnable, but keep scanListener alive in MediaRouter so provider remains active
-                        pollRunnable?.let {
-                            mainHandler.removeCallbacks(it)
-                            pollRunnable = null
+                        if (!hasInitiatedSelection) {
+                            hasInitiatedSelection = true
+                            AppLogger.i(LogCategory.CAST, TAG, "Selecting discovered target route: ${route.name} (${route.id})")
+                            // Stop polling runnable, but keep scanListener alive in MediaRouter so provider remains active
+                            pollRunnable?.let {
+                                mainHandler.removeCallbacks(it)
+                                pollRunnable = null
+                            }
+                            activePollRunnable = null
+                            triggerRouteSelection(mediaRouter, selector, route)
+                            startTimeoutWatchdog(context, castContext, route.name, onError)
+                        } else {
+                            AppLogger.i(LogCategory.CAST, TAG, "Route selection already initiated; ignoring duplicate event for ${route.name}")
                         }
-                        activePollRunnable = null
-                        triggerRouteSelection(mediaRouter, selector, route)
-                        startTimeoutWatchdog(context, castContext, route.name, onError)
                     }
 
                     scanListener = object : MediaRouter.Callback() {
                         override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
                             AppLogger.i(LogCategory.CAST, TAG, "onRouteAdded: ${route.name} (${route.id})")
-                            if (!route.isDefault && isRouteTargetMatch(route)) {
+                            if (!hasInitiatedSelection && !route.isDefault && isRouteTargetMatch(route)) {
                                 selectMatchingRoute(route)
                             }
                         }
 
                         override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
                             AppLogger.i(LogCategory.CAST, TAG, "onRouteChanged: ${route.name} (${route.id})")
-                            if (!route.isDefault && isRouteTargetMatch(route)) {
+                            if (!hasInitiatedSelection && !route.isDefault && isRouteTargetMatch(route)) {
                                 selectMatchingRoute(route)
                             }
                         }
@@ -400,7 +409,7 @@ object CastMediaManager {
                     // Periodic 500ms polling safeguard
                     pollRunnable = object : Runnable {
                         override fun run() {
-                            if (isSessionConnected || !_isCastingFlow.value) {
+                            if (isSessionConnected || !_isCastingFlow.value || hasInitiatedSelection) {
                                 pollRunnable = null
                                 activePollRunnable = null
                                 return
@@ -621,6 +630,7 @@ object CastMediaManager {
      */
     fun stopCast(context: Context) {
         cancelTimeoutWatchdog()
+        hasInitiatedSelection = false
         activePollRunnable?.let { mainHandler.removeCallbacks(it) }
         activePollRunnable = null
         stopDiscovery(context)

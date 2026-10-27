@@ -112,9 +112,10 @@ class AthanAlarmReceiver : BroadcastReceiver() {
         val alarmMode = AlarmMode.entries.firstOrNull { it.name == modeName } ?: AlarmMode.ATHAN
         AppLogger.i(LogCategory.ALARM, TAG, "Triggering prayer alarm for $prayerName (mode: $alarmMode, sound: $soundChoice)")
 
-        // Cancel previous pre-alert notification if showing
+        // Cancel previous pre-alert notification and old persistent prayer notification if showing
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(PRE_ALERT_NOTIFICATION_ID)
+        notificationManager.cancel(AthanAudioService.PRAYER_PERSISTENT_NOTIFICATION_ID)
 
         if (alarmMode != AlarmMode.MUTED) {
             val serviceIntent = Intent(context, AthanAudioService::class.java).apply {
