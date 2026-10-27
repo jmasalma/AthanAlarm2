@@ -50,6 +50,7 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
     val uiState: StateFlow<AthanUiState> = _uiState.asStateFlow()
 
     private var countdownJob: Job? = null
+    private var lastCalculatedDay: Int = -1
 
     init {
         viewModelScope.launch {
@@ -62,6 +63,7 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
 
     private fun recalculatePrayers(settings: AppSettings) {
         val now = Calendar.getInstance()
+        lastCalculatedDay = now.get(Calendar.DAY_OF_YEAR)
         val year = now.get(Calendar.YEAR)
         val month = now.get(Calendar.MONTH) + 1
         val day = now.get(Calendar.DAY_OF_MONTH)
@@ -163,19 +165,32 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
 
     private fun updateCountdown() {
         val state = _uiState.value
-        val next = state.nextPrayer ?: return
-
         val now = Calendar.getInstance()
+        val currentDay = now.get(Calendar.DAY_OF_YEAR)
+
+        // Day changed (midnight roll-over) or prayers not yet initialized
+        if (currentDay != lastCalculatedDay || state.nextPrayer == null) {
+            recalculatePrayers(state.settings)
+            return
+        }
+
+        val next = state.nextPrayer ?: return
         val nowSec = now.get(Calendar.HOUR_OF_DAY) * 3600 +
                 now.get(Calendar.MINUTE) * 60 +
                 now.get(Calendar.SECOND)
 
         val targetSec = next.hour * 3600 + next.minute * 60
 
+        // If today's scheduled prayer time has arrived/passed, advance to next prayer immediately!
+        if (next.type != PrayerType.NEXT_FAJR && targetSec <= nowSec) {
+            recalculatePrayers(state.settings)
+            return
+        }
+
         val diffSec = if (targetSec >= nowSec) {
             targetSec - nowSec
         } else {
-            // Target is tomorrow
+            // Target is tomorrow (e.g. NEXT_FAJR in late evening before midnight)
             (86400 - nowSec) + targetSec
         }
 
@@ -193,6 +208,10 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
             countdownFormatted = formatted,
             countdownProgress = progress
         )
+    }
+
+    fun refreshPrayers() {
+        recalculatePrayers(_uiState.value.settings)
     }
 
     fun toggleAlarmMode(context: Context, type: PrayerType): AlarmMode {

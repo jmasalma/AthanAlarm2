@@ -385,8 +385,8 @@ fun SettingsScreen(
                         // Device Selection Row
                         SettingsClickableItem(
                             icon = Icons.Default.Speaker,
-                            title = "Chromecast Device(s)",
-                            subtitle = uiState.settings.castDeviceName ?: "Tap to choose Google / Chromecast speaker(s)",
+                            title = "Cast Target (Speaker or Group)",
+                            subtitle = uiState.settings.castDeviceName ?: "Tap to choose speaker or Speaker Group",
                             onClick = { showCastDeviceDialog = true }
                         )
 

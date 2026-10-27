@@ -322,6 +322,11 @@ object CastMediaManager {
                     "MediaRouter initial cache: total=${initialRoutes.size}, nonDefault=${nonDefaultInitial.size}: ${nonDefaultInitial.map { "${it.name}(${it.id})" }}"
                 )
 
+                val isGroupRoute: (MediaRouter.RouteInfo) -> Boolean = { route ->
+                    route.name.contains("group", ignoreCase = true) ||
+                            (route.description?.contains("group", ignoreCase = true) == true)
+                }
+
                 val isRouteTargetMatch: (MediaRouter.RouteInfo) -> Boolean = { route ->
                     if (targetIds.isNotEmpty() || targetNames.isNotEmpty()) {
                         targetIds.contains(route.id) || targetNames.any { name ->
@@ -334,8 +339,22 @@ object CastMediaManager {
 
                 // 3. Find target route
                 val findTargetRoute: () -> MediaRouter.RouteInfo? = {
-                    mediaRouter.routes.firstOrNull { !it.isDefault && isRouteTargetMatch(it) }
-                        ?: mediaRouter.routes.firstOrNull { !it.isDefault && it.matchesSelector(selector) }
+                    val nonDefault = mediaRouter.routes.filter { !it.isDefault }
+                    val groupRoute = if (targetIds.size > 1) {
+                        nonDefault.firstOrNull { it.matchesSelector(selector) && isGroupRoute(it) }
+                    } else null
+
+                    if (groupRoute != null) {
+                        AppLogger.i(
+                            LogCategory.CAST,
+                            TAG,
+                            "Multi-device target ($targetDeviceName) specified; auto-routing to Speaker Group: ${groupRoute.name}"
+                        )
+                        groupRoute
+                    } else {
+                        nonDefault.firstOrNull { isRouteTargetMatch(it) }
+                            ?: nonDefault.firstOrNull { it.matchesSelector(selector) }
+                    }
                 }
 
                 val targetRoute = findTargetRoute()
@@ -376,15 +395,33 @@ object CastMediaManager {
                     scanListener = object : MediaRouter.Callback() {
                         override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
                             AppLogger.i(LogCategory.CAST, TAG, "onRouteAdded: ${route.name} (${route.id})")
-                            if (!hasInitiatedSelection && !route.isDefault && isRouteTargetMatch(route)) {
-                                selectMatchingRoute(route)
+                            if (!hasInitiatedSelection && !route.isDefault) {
+                                if (targetIds.size > 1 && isGroupRoute(route) && route.matchesSelector(selector)) {
+                                    AppLogger.i(
+                                        LogCategory.CAST,
+                                        TAG,
+                                        "Multi-device target configured; auto-selecting discovered Speaker Group: ${route.name}"
+                                    )
+                                    selectMatchingRoute(route)
+                                } else if (isRouteTargetMatch(route)) {
+                                    selectMatchingRoute(route)
+                                }
                             }
                         }
 
                         override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
                             AppLogger.i(LogCategory.CAST, TAG, "onRouteChanged: ${route.name} (${route.id})")
-                            if (!hasInitiatedSelection && !route.isDefault && isRouteTargetMatch(route)) {
-                                selectMatchingRoute(route)
+                            if (!hasInitiatedSelection && !route.isDefault) {
+                                if (targetIds.size > 1 && isGroupRoute(route) && route.matchesSelector(selector)) {
+                                    AppLogger.i(
+                                        LogCategory.CAST,
+                                        TAG,
+                                        "Multi-device target configured; auto-selecting Speaker Group: ${route.name}"
+                                    )
+                                    selectMatchingRoute(route)
+                                } else if (isRouteTargetMatch(route)) {
+                                    selectMatchingRoute(route)
+                                }
                             }
                         }
 
@@ -416,6 +453,14 @@ object CastMediaManager {
                             }
                             pollCount++
                             val currentNonDefault = mediaRouter.routes.filter { !it.isDefault }
+                            if (targetIds.size > 1) {
+                                val group = currentNonDefault.firstOrNull { isGroupRoute(it) && it.matchesSelector(selector) }
+                                if (group != null) {
+                                    AppLogger.i(LogCategory.CAST, TAG, "Periodic scan found Speaker Group for multi-device target: ${group.name}")
+                                    selectMatchingRoute(group)
+                                    return
+                                }
+                            }
                             val match = currentNonDefault.firstOrNull { isRouteTargetMatch(it) }
                             if (match != null) {
                                 AppLogger.i(LogCategory.CAST, TAG, "Periodic scan found matching route at tick #$pollCount (${pollCount * 500}ms): ${match.name}")
