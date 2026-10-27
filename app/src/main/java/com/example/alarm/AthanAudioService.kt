@@ -48,6 +48,8 @@ class AthanAudioService : Service() {
     private var isLocalAudioPlaying = false
     private var isCastPlayingOrPending = false
     private var castingObserverJob: Job? = null
+    private var currentPrayerType: PrayerType = PrayerType.FAJR
+    private var screenWakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
 
     companion object {
@@ -75,6 +77,14 @@ class AthanAudioService : Service() {
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "AthanAlarm::AudioPlaybackWakeLock"
+        ).apply {
+            setReferenceCounted(false)
+        }
+
+        @Suppress("DEPRECATION")
+        screenWakeLock = powerManager.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+            "AthanAlarm::ScreenWakeLock"
         ).apply {
             setReferenceCounted(false)
         }
@@ -115,6 +125,7 @@ class AthanAudioService : Service() {
 
                 val prayerType = PrayerType.fromName(prayerName)
                 val alarmMode = AlarmMode.entries.firstOrNull { it.name == modeName } ?: AlarmMode.ATHAN
+                currentPrayerType = prayerType
 
                 startForeground(NOTIFICATION_ID, buildNotification(prayerType, alarmMode))
 
@@ -129,6 +140,12 @@ class AthanAudioService : Service() {
 
     private fun handleAlarmPlayback(soundChoice: String, alarmMode: AlarmMode, prayerType: PrayerType) {
         wakeLock?.acquire(5 * 60 * 1000L) // 5 minutes safety timeout
+        try {
+            screenWakeLock?.acquire(25000L) // 25s screen wake so Wi-Fi mDNS multicast unblocks
+            AppLogger.i(LogCategory.ALARM, TAG, "ScreenWakeLock acquired: screen turned on for alarm")
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.ALARM, TAG, "Could not acquire ScreenWakeLock: ${e.message}")
+        }
 
         serviceScope.launch {
             try {
@@ -375,6 +392,7 @@ class AthanAudioService : Service() {
         abandonAudioFocus()
         CastMediaManager.stopCast(applicationContext)
         releaseLocks()
+        showPersistentPrayerNotification(applicationContext, currentPrayerType)
     }
 
     private fun releaseLocks() {
@@ -388,6 +406,9 @@ class AthanAudioService : Service() {
             }
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
+            }
+            if (screenWakeLock?.isHeld == true) {
+                screenWakeLock?.release()
             }
         } catch (_: Exception) {}
     }
@@ -449,8 +470,8 @@ class AthanAudioService : Service() {
         )
 
         val prayerDisplayName = prayerType.englishName
-        val title = "Time for $prayerDisplayName"
-        val text = "Prayer time has arrived. Hayya 'ala-s-Salah."
+        val title = "$prayerDisplayName Prayer Time"
+        val text = "It is time for $prayerDisplayName"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification_athan)
@@ -465,6 +486,37 @@ class AthanAudioService : Service() {
             .addAction(0, "Stop Athan", stopPendingIntent)
             .addAction(0, "Snooze (10m)", snoozePendingIntent)
             .build()
+    }
+
+    private fun showPersistentPrayerNotification(context: Context, prayerType: PrayerType) {
+        val openAppIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            context,
+            0,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val prayerDisplayName = prayerType.englishName
+        val title = "$prayerDisplayName Prayer Time"
+        val text = "It is time for $prayerDisplayName"
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification_athan)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(openAppPendingIntent)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .build()
+
+        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     private fun createNotificationChannel() {

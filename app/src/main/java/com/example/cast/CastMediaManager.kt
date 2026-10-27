@@ -38,6 +38,7 @@ object CastMediaManager {
     private var pendingMediaInfo: MediaInfo? = null
     private var activeSessionListener: SessionManagerListener<CastSession>? = null
     private var activeDiscoveryCallback: MediaRouter.Callback? = null
+    private var activeScanCallback: MediaRouter.Callback? = null
     private var connectionTimeoutRunnable: Runnable? = null
     private var remoteClientCallback: RemoteMediaClient.Callback? = null
     private var activePollRunnable: Runnable? = null
@@ -119,12 +120,20 @@ object CastMediaManager {
                         override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
                             AppLogger.i(LogCategory.CAST, TAG, "Route changed: ${route.name} (ID: ${route.id})")
                         }
+                        override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
+                            AppLogger.i(LogCategory.CAST, TAG, "Discovery cb onRouteSelected: ${route.name} (reason=$reason)")
+                        }
+                        override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
+                            AppLogger.i(LogCategory.CAST, TAG, "Discovery cb onRouteUnselected: ${route.name} (reason=$reason)")
+                        }
                     }
                     activeDiscoveryCallback = cb
                     mediaRouter.addCallback(
                         selector,
                         cb,
-                        MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY or MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN
+                        MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY or
+                                MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN or
+                                MediaRouter.CALLBACK_FLAG_UNFILTERED_EVENTS
                     )
                     AppLogger.i(LogCategory.CAST, TAG, "Background route discovery started with active scan flags")
                 }
@@ -140,15 +149,20 @@ object CastMediaManager {
     fun stopDiscovery(context: Context) {
         mainHandler.post {
             try {
+                val mediaRouter = MediaRouter.getInstance(context)
                 activeDiscoveryCallback?.let { cb ->
-                    val mediaRouter = MediaRouter.getInstance(context)
                     mediaRouter.removeCallback(cb)
                     AppLogger.i(LogCategory.CAST, TAG, "Background route discovery callback removed")
+                }
+                activeScanCallback?.let { cb ->
+                    mediaRouter.removeCallback(cb)
+                    AppLogger.i(LogCategory.CAST, TAG, "Active scan route callback removed")
                 }
             } catch (e: Exception) {
                 AppLogger.w(LogCategory.CAST, TAG, "Error removing discovery callback: ${e.message}")
             } finally {
                 activeDiscoveryCallback = null
+                activeScanCallback = null
             }
         }
     }
@@ -338,21 +352,14 @@ object CastMediaManager {
                     var pollRunnable: Runnable? = null
                     var pollCount = 0
 
-                    val cleanupScan = {
-                        scanListener?.let {
-                            try { mediaRouter.removeCallback(it) } catch (_: Exception) {}
-                            scanListener = null
-                        }
+                    val selectMatchingRoute: (MediaRouter.RouteInfo) -> Unit = { route ->
+                        AppLogger.i(LogCategory.CAST, TAG, "Selecting discovered target route: ${route.name} (${route.id})")
+                        // Stop polling runnable, but keep scanListener alive in MediaRouter so provider remains active
                         pollRunnable?.let {
                             mainHandler.removeCallbacks(it)
                             pollRunnable = null
                         }
                         activePollRunnable = null
-                    }
-
-                    val selectMatchingRoute: (MediaRouter.RouteInfo) -> Unit = { route ->
-                        AppLogger.i(LogCategory.CAST, TAG, "Selecting discovered target route: ${route.name} (${route.id})")
-                        cleanupScan()
                         triggerRouteSelection(mediaRouter, selector, route)
                         startTimeoutWatchdog(context, castContext, route.name, onError)
                     }
@@ -371,11 +378,20 @@ object CastMediaManager {
                                 selectMatchingRoute(route)
                             }
                         }
+
+                        override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
+                            AppLogger.i(LogCategory.CAST, TAG, "MediaRouter onRouteSelected: ${route.name} (${route.id}) [reason=$reason]")
+                        }
+
+                        override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
+                            AppLogger.i(LogCategory.CAST, TAG, "MediaRouter onRouteUnselected: ${route.name} (${route.id}) [reason=$reason]")
+                        }
                     }
+                    activeScanCallback = scanListener
 
                     mediaRouter.addCallback(
                         selector,
-                        scanListener!!,
+                        scanListener,
                         MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN or
                                 MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY or
                                 MediaRouter.CALLBACK_FLAG_UNFILTERED_EVENTS
@@ -385,7 +401,8 @@ object CastMediaManager {
                     pollRunnable = object : Runnable {
                         override fun run() {
                             if (isSessionConnected || !_isCastingFlow.value) {
-                                cleanupScan()
+                                pollRunnable = null
+                                activePollRunnable = null
                                 return
                             }
                             pollCount++
@@ -408,7 +425,8 @@ object CastMediaManager {
                             if (pollCount < 40) { // 20s max polling
                                 mainHandler.postDelayed(this, 500L)
                             } else {
-                                cleanupScan()
+                                pollRunnable = null
+                                activePollRunnable = null
                             }
                         }
                     }

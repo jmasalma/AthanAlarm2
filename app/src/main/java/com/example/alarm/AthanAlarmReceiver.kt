@@ -40,6 +40,17 @@ class AthanAlarmReceiver : BroadcastReceiver() {
         )
         wakeLock.acquire(15000L) // 15 seconds to dispatch
 
+        if (action == AthanAlarmScheduler.ACTION_PRAYER_ALARM) {
+            try {
+                @Suppress("DEPRECATION")
+                val screenLock = powerManager.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                    "AthanAlarm::ReceiverScreenWakeLock"
+                )
+                screenLock.acquire(15000L)
+            } catch (_: Exception) {}
+        }
+
         try {
             when (action) {
                 AthanAlarmScheduler.ACTION_PRE_PRAYER_ALERT -> {
