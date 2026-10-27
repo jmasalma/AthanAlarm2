@@ -129,13 +129,6 @@ class AthanAudioService : Service() {
 
     private fun handleAlarmPlayback(soundChoice: String, alarmMode: AlarmMode, prayerType: PrayerType) {
         wakeLock?.acquire(5 * 60 * 1000L) // 5 minutes safety timeout
-        wifiLock?.acquire()
-        try {
-            multicastLock?.acquire()
-            AppLogger.i(LogCategory.ALARM, TAG, "MulticastLock acquired: isHeld=${multicastLock?.isHeld}")
-        } catch (e: Exception) {
-            AppLogger.w(LogCategory.ALARM, TAG, "Could not acquire MulticastLock: ${e.message}")
-        }
 
         serviceScope.launch {
             try {
@@ -153,6 +146,17 @@ class AthanAudioService : Service() {
                     AppLogger.i(LogCategory.ALARM, TAG, "Silent mode with Cast disabled. Notification active.")
                     releaseLocks()
                     return@launch
+                }
+
+                // Strictly acquire network locks only when Cast is enabled
+                if (isCastEnabled) {
+                    wifiLock?.acquire()
+                    try {
+                        multicastLock?.acquire()
+                        AppLogger.i(LogCategory.ALARM, TAG, "MulticastLock acquired: isHeld=${multicastLock?.isHeld}")
+                    } catch (e: Exception) {
+                        AppLogger.w(LogCategory.ALARM, TAG, "Could not acquire MulticastLock: ${e.message}")
+                    }
                 }
 
                 if (isPhoneAudioEnabled) {

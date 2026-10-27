@@ -135,6 +135,25 @@ object CastMediaManager {
     }
 
     /**
+     * Stops active route discovery to preserve device battery when not casting.
+     */
+    fun stopDiscovery(context: Context) {
+        mainHandler.post {
+            try {
+                activeDiscoveryCallback?.let { cb ->
+                    val mediaRouter = MediaRouter.getInstance(context)
+                    mediaRouter.removeCallback(cb)
+                    AppLogger.i(LogCategory.CAST, TAG, "Background route discovery callback removed")
+                }
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.CAST, TAG, "Error removing discovery callback: ${e.message}")
+            } finally {
+                activeDiscoveryCallback = null
+            }
+        }
+    }
+
+    /**
      * Connects to a specific route by ID immediately.
      */
     fun selectRouteById(context: Context, routeId: String) {
@@ -144,16 +163,57 @@ object CastMediaManager {
                 val target = mediaRouter.routes.firstOrNull { it.id == routeId }
                 if (target != null) {
                     AppLogger.i(LogCategory.CAST, TAG, "Selecting Cast route: ${target.name} (${target.id})")
-                    if (mediaRouter.selectedRoute.id == target.id) {
-                        mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
+                    if (mediaRouter.selectedRoute.id != target.id) {
+                        mediaRouter.selectRoute(target)
                     }
-                    mediaRouter.selectRoute(target)
                 } else {
                     AppLogger.w(LogCategory.CAST, TAG, "Target route $routeId not currently in MediaRouter routes")
                 }
             } catch (e: Exception) {
                 AppLogger.e(LogCategory.CAST, TAG, "Error selecting route $routeId: ${e.message}", e)
             }
+        }
+    }
+
+    private fun triggerRouteSelection(
+        mediaRouter: MediaRouter,
+        selector: MediaRouteSelector,
+        targetRoute: MediaRouter.RouteInfo
+    ) {
+        if (mediaRouter.selectedRoute.id == targetRoute.id) {
+            AppLogger.i(
+                LogCategory.CAST,
+                TAG,
+                "Route already selected in MediaRouter (${targetRoute.name}); resetting via defaultRoute to trigger clean Cast session..."
+            )
+            var reselected = false
+            var callback: MediaRouter.Callback? = null
+            callback = object : MediaRouter.Callback() {
+                override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                    if (route.isDefault && !reselected) {
+                        reselected = true
+                        AppLogger.i(LogCategory.CAST, TAG, "MediaRouter returned to default route; now selecting target route: ${targetRoute.name}")
+                        callback?.let { router.removeCallback(it) }
+                        router.selectRoute(targetRoute)
+                    }
+                }
+            }
+            mediaRouter.addCallback(selector, callback, MediaRouter.CALLBACK_FLAG_UNFILTERED_EVENTS)
+            mediaRouter.selectRoute(mediaRouter.defaultRoute)
+
+            mainHandler.postDelayed({
+                if (!reselected) {
+                    reselected = true
+                    callback?.let {
+                        try { mediaRouter.removeCallback(it) } catch (_: Exception) {}
+                    }
+                    AppLogger.i(LogCategory.CAST, TAG, "Fallback timer selecting target route: ${targetRoute.name}")
+                    mediaRouter.selectRoute(targetRoute)
+                }
+            }, 300L)
+        } else {
+            AppLogger.i(LogCategory.CAST, TAG, "Selecting target route in MediaRouter: ${targetRoute.name} (${targetRoute.id})")
+            mediaRouter.selectRoute(targetRoute)
         }
     }
 
@@ -222,6 +282,15 @@ object CastMediaManager {
                     return@post
                 }
 
+                // 2. If session is currently connecting or resuming, wait for it
+                if (currentSession != null && (currentSession.isConnecting || currentSession.isResuming)) {
+                    AppLogger.i(LogCategory.CAST, TAG, "Existing CastSession is connecting/resuming. Waiting for connection...")
+                    pendingMediaInfo = mediaInfo
+                    attachSessionListener(castContext, onStarted, onError)
+                    startTimeoutWatchdog(context, castContext, targetDeviceName ?: "Google Cast speaker", onError)
+                    return@post
+                }
+
                 val mediaRouter = MediaRouter.getInstance(context)
                 val selector = castContext?.mergedSelector ?: getCastSelector()
 
@@ -246,7 +315,7 @@ object CastMediaManager {
                     }
                 }
 
-                // 2. Find target route
+                // 3. Find target route
                 val findTargetRoute: () -> MediaRouter.RouteInfo? = {
                     mediaRouter.routes.firstOrNull { !it.isDefault && isRouteTargetMatch(it) }
                         ?: mediaRouter.routes.firstOrNull { !it.isDefault && it.matchesSelector(selector) }
@@ -258,17 +327,8 @@ object CastMediaManager {
                     AppLogger.i(LogCategory.CAST, TAG, "Found target route in initial cache: ${targetRoute.name} (${targetRoute.id}). Initiating session...")
                     pendingMediaInfo = mediaInfo
                     attachSessionListener(castContext, onStarted, onError)
-
-                    if (mediaRouter.selectedRoute.id == targetRoute.id) {
-                        AppLogger.i(LogCategory.CAST, TAG, "Route already selected in MediaRouter; resetting to re-establish session")
-                        mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
-                        mainHandler.postDelayed({
-                            mediaRouter.selectRoute(targetRoute)
-                        }, 150L)
-                    } else {
-                        mediaRouter.selectRoute(targetRoute)
-                    }
-                    startTimeoutWatchdog(castContext, targetRoute.name, onError)
+                    triggerRouteSelection(mediaRouter, selector, targetRoute)
+                    startTimeoutWatchdog(context, castContext, targetRoute.name, onError)
                 } else if (castContext != null) {
                     AppLogger.i(LogCategory.CAST, TAG, "Target route not in initial cache. Starting active scan with callbacks & periodic polling...")
                     pendingMediaInfo = mediaInfo
@@ -293,15 +353,8 @@ object CastMediaManager {
                     val selectMatchingRoute: (MediaRouter.RouteInfo) -> Unit = { route ->
                         AppLogger.i(LogCategory.CAST, TAG, "Selecting discovered target route: ${route.name} (${route.id})")
                         cleanupScan()
-                        if (mediaRouter.selectedRoute.id == route.id) {
-                            mediaRouter.unselect(MediaRouter.UNSELECT_REASON_STOPPED)
-                            mainHandler.postDelayed({
-                                mediaRouter.selectRoute(route)
-                            }, 150L)
-                        } else {
-                            mediaRouter.selectRoute(route)
-                        }
-                        startTimeoutWatchdog(castContext, route.name, onError)
+                        triggerRouteSelection(mediaRouter, selector, route)
+                        startTimeoutWatchdog(context, castContext, route.name, onError)
                     }
 
                     scanListener = object : MediaRouter.Callback() {
@@ -362,7 +415,7 @@ object CastMediaManager {
                     activePollRunnable = pollRunnable
                     mainHandler.postDelayed(pollRunnable!!, 500L)
 
-                    startTimeoutWatchdog(castContext, targetDeviceName ?: "Google Cast speaker", onError)
+                    startTimeoutWatchdog(context, castContext, targetDeviceName ?: "Google Cast speaker", onError)
                 } else {
                     AppLogger.e(LogCategory.CAST, TAG, "CastContext is null; Google Play Services Cast unavailable")
                     _isCastingFlow.value = false
@@ -378,7 +431,7 @@ object CastMediaManager {
         }
     }
 
-    private fun startTimeoutWatchdog(castContext: CastContext, deviceName: String, onError: ((String) -> Unit)?) {
+    private fun startTimeoutWatchdog(context: Context, castContext: CastContext, deviceName: String, onError: ((String) -> Unit)?) {
         cancelTimeoutWatchdog()
         val watchdog = Runnable {
             if (!isSessionConnected) {
@@ -386,6 +439,14 @@ object CastMediaManager {
                 detachSessionListener(castContext)
                 pendingMediaInfo = null
                 _isCastingFlow.value = false
+                try {
+                    val mediaRouter = MediaRouter.getInstance(context)
+                    if (mediaRouter.selectedRoute.id != mediaRouter.defaultRoute.id) {
+                        mediaRouter.selectRoute(mediaRouter.defaultRoute)
+                        AppLogger.i(LogCategory.CAST, TAG, "Reset MediaRouter to default route after timeout")
+                    }
+                } catch (_: Exception) {}
+                stopDiscovery(context)
                 releaseLocks()
                 onError?.invoke("Could not connect to $deviceName. Please check that it is powered on and on the same Wi-Fi.")
             }
@@ -465,7 +526,11 @@ object CastMediaManager {
             }
 
             override fun onSessionStarted(session: CastSession, sessionId: String) {
-                AppLogger.i(LogCategory.CAST, TAG, "Cast session started successfully (SessionId: $sessionId)")
+                AppLogger.i(
+                    LogCategory.CAST,
+                    TAG,
+                    "Cast session started successfully (SessionId: $sessionId, Device: ${session.castDevice?.friendlyName})"
+                )
                 isSessionConnected = true
                 cancelTimeoutWatchdog()
                 try {
@@ -540,6 +605,8 @@ object CastMediaManager {
         cancelTimeoutWatchdog()
         activePollRunnable?.let { mainHandler.removeCallbacks(it) }
         activePollRunnable = null
+        stopDiscovery(context)
+
         mainHandler.post {
             try {
                 AppLogger.i(LogCategory.CAST, TAG, "stopCast called")
@@ -550,10 +617,25 @@ object CastMediaManager {
                 }
                 castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.let { client ->
                     remoteClientCallback?.let { client.unregisterCallback(it) }
-                    client.stop()
+                    try { client.stop() } catch (_: Exception) {}
+                }
+                try {
+                    castContext?.sessionManager?.endCurrentSession(true)
+                    AppLogger.i(LogCategory.CAST, TAG, "Cast session ended cleanly via endCurrentSession(true)")
+                } catch (e: Exception) {
+                    AppLogger.w(LogCategory.CAST, TAG, "Error ending Cast session: ${e.message}")
+                }
+                try {
+                    val mediaRouter = MediaRouter.getInstance(context)
+                    if (mediaRouter.selectedRoute.id != mediaRouter.defaultRoute.id) {
+                        mediaRouter.selectRoute(mediaRouter.defaultRoute)
+                        AppLogger.i(LogCategory.CAST, TAG, "Reset MediaRouter to default route: ${mediaRouter.defaultRoute.name}")
+                    }
+                } catch (e: Exception) {
+                    AppLogger.w(LogCategory.CAST, TAG, "Error resetting MediaRouter route: ${e.message}")
                 }
             } catch (e: Exception) {
-                AppLogger.w(LogCategory.CAST, TAG, "Error stopping remote media client: ${e.message}")
+                AppLogger.w(LogCategory.CAST, TAG, "Error in stopCast: ${e.message}")
             } finally {
                 remoteClientCallback = null
                 localHttpServer.stop()

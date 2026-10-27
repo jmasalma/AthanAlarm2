@@ -320,11 +320,6 @@ fun CastDeviceSelectionDialog(
                         val joinedIds = selectedDevices.joinToString(",") { it.id }
                         val joinedNames = selectedDevices.joinToString(", ") { it.name }
 
-                        // Pre-connect route immediately to active session
-                        selectedDevices.firstOrNull()?.id?.let { firstId ->
-                            CastMediaManager.selectRouteById(context, firstId)
-                        }
-
                         onDeviceSelected(joinedIds, joinedNames)
                     }
                     onDismiss()
