@@ -19,4 +19,12 @@ debug.keystore
 *.jks
 .build-outputs/
 release-artifacts/
+
+# AI Studio platform artifacts and temporary attachments
 .aistudio/
+/.aistudio/
+**/.aistudio/
+public/
+/public/
+*.log
+*Diagnostic_Logs*

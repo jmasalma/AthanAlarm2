@@ -70,8 +70,13 @@ fun CastDeviceSelectionDialog(
 
     fun getFilteredRoutes(): List<CastDeviceItem> {
         return mediaRouter.routes.filter { route ->
-            !route.isDefault && route.matchesSelector(selector)
-        }.map { route ->
+            val id = route.id
+            !route.isDefault &&
+                    !id.endsWith("-member") &&
+                    !id.contains(":member") &&
+                    !id.contains("-member") &&
+                    route.matchesSelector(selector)
+        }.distinctBy { it.id }.map { route ->
             val isGroup = route.name.contains("group", ignoreCase = true) ||
                     (route.description?.contains("group", ignoreCase = true) == true)
             CastDeviceItem(
@@ -85,9 +90,11 @@ fun CastDeviceSelectionDialog(
 
     var discoveredDevices by remember { mutableStateOf(getFilteredRoutes()) }
 
-    // Parse existing selection (if legacy comma-separated, select group first or first match)
+    // Parse existing selection (if legacy comma-separated or member id, select group first or first match)
     val initialSelectedId = remember(currentSelectedId, discoveredDevices) {
-        val ids = currentSelectedId?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+        val ids = currentSelectedId?.split(",")?.map { it.trim() }?.filter {
+            it.isNotEmpty() && !it.endsWith("-member") && !it.contains(":member") && !it.contains("-member")
+        } ?: emptyList()
         // If one of the saved IDs is a discovered Speaker Group, pick it
         val matchingGroup = discoveredDevices.firstOrNull { it.isGroup && ids.contains(it.id) }
         matchingGroup?.id ?: ids.firstOrNull() ?: discoveredDevices.firstOrNull { it.isGroup }?.id
