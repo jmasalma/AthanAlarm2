@@ -201,35 +201,14 @@ object CastMediaManager {
             AppLogger.i(
                 LogCategory.CAST,
                 TAG,
-                "Route already selected in MediaRouter (${targetRoute.name}); resetting via defaultRoute to trigger clean Cast session..."
+                "Target route is already selected in MediaRouter: ${targetRoute.name} (${targetRoute.id})"
             )
-            var reselected = false
-            var callback: MediaRouter.Callback? = null
-            callback = object : MediaRouter.Callback() {
-                override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                    if (route.isDefault && !reselected) {
-                        reselected = true
-                        AppLogger.i(LogCategory.CAST, TAG, "MediaRouter returned to default route; now selecting target route: ${targetRoute.name}")
-                        callback?.let { router.removeCallback(it) }
-                        router.selectRoute(targetRoute)
-                    }
-                }
-            }
-            mediaRouter.addCallback(selector, callback, MediaRouter.CALLBACK_FLAG_UNFILTERED_EVENTS)
-            mediaRouter.selectRoute(mediaRouter.defaultRoute)
-
-            mainHandler.postDelayed({
-                if (!reselected) {
-                    reselected = true
-                    callback?.let {
-                        try { mediaRouter.removeCallback(it) } catch (_: Exception) {}
-                    }
-                    AppLogger.i(LogCategory.CAST, TAG, "Fallback timer selecting target route: ${targetRoute.name}")
-                    mediaRouter.selectRoute(targetRoute)
-                }
-            }, 300L)
         } else {
-            AppLogger.i(LogCategory.CAST, TAG, "Selecting target route in MediaRouter: ${targetRoute.name} (${targetRoute.id})")
+            AppLogger.i(
+                LogCategory.CAST,
+                TAG,
+                "Selecting target route in MediaRouter: ${targetRoute.name} (${targetRoute.id})"
+            )
             mediaRouter.selectRoute(targetRoute)
         }
     }
@@ -463,32 +442,17 @@ object CastMediaManager {
                             )
                             if (!valid) return
 
-                            val curSession = castContext.sessionManager.currentCastSession
-                            val isSessionAlive = curSession != null && (curSession.isConnected || curSession.isConnecting || curSession.isResuming)
-
-                            if (!isSessionAlive) {
-                                if (!hasInitiatedSelection) {
-                                    if (targetIds.size > 1 && isGroupRoute(route) && route.matchesSelector(selector)) {
-                                        AppLogger.i(
-                                            LogCategory.CAST,
-                                            TAG,
-                                            "Multi-device target configured; auto-selecting Speaker Group: ${route.name}"
-                                        )
-                                        selectMatchingRoute(route, "onRouteChanged(group)")
-                                    } else if (isRouteTargetMatch(route)) {
-                                        selectMatchingRoute(route, "onRouteChanged(match)")
-                                    }
-                                } else if (route.id == selectedTargetRouteId || isRouteTargetMatch(route)) {
-                                    val elapsed = System.currentTimeMillis() - lastSelectionAttemptTime
-                                    if (elapsed in 200L..15000L) {
-                                        AppLogger.i(
-                                            LogCategory.CAST,
-                                            TAG,
-                                            "Route ${route.name} updated with CastDevice=${castDev != null} after ${elapsed}ms without active CastSession. Re-asserting selection..."
-                                        )
-                                        lastSelectionAttemptTime = System.currentTimeMillis()
-                                        triggerRouteSelection(mediaRouter, selector, route)
-                                    }
+                            // If selection has not been initiated yet, check if this updated route matches our target
+                            if (!hasInitiatedSelection) {
+                                if (targetIds.size > 1 && isGroupRoute(route) && route.matchesSelector(selector)) {
+                                    AppLogger.i(
+                                        LogCategory.CAST,
+                                        TAG,
+                                        "Multi-device target configured; auto-selecting Speaker Group: ${route.name}"
+                                    )
+                                    selectMatchingRoute(route, "onRouteChanged(group)")
+                                } else if (isRouteTargetMatch(route)) {
+                                    selectMatchingRoute(route, "onRouteChanged(match)")
                                 }
                             }
                         }
@@ -544,21 +508,6 @@ object CastMediaManager {
                                     selectMatchingRoute(match, "periodicScan(match)")
                                     return
                                 }
-                            } else {
-                                val elapsed = System.currentTimeMillis() - lastSelectionAttemptTime
-                                if (elapsed >= 1500L && pollCount < 38) {
-                                    val targetToReselect = validRoutes.firstOrNull { it.id == selectedTargetRouteId }
-                                        ?: validRoutes.firstOrNull { isRouteTargetMatch(it) }
-                                    if (targetToReselect != null) {
-                                        AppLogger.i(
-                                            LogCategory.CAST,
-                                            TAG,
-                                            "Periodic check: CastSession still not starting after ${elapsed}ms. Re-asserting selection for: ${targetToReselect.name}"
-                                        )
-                                        lastSelectionAttemptTime = System.currentTimeMillis()
-                                        triggerRouteSelection(mediaRouter, selector, targetToReselect)
-                                    }
-                                }
                             }
 
                             if (pollCount % 4 == 0) { // Log every 2 seconds
@@ -602,17 +551,7 @@ object CastMediaManager {
             if (!isSessionConnected) {
                 AppLogger.w(LogCategory.CAST, TAG, "Cast session connection timed out (20s) for: $deviceName")
                 detachSessionListener(castContext)
-                pendingMediaInfo = null
-                _isCastingFlow.value = false
-                try {
-                    val mediaRouter = MediaRouter.getInstance(context)
-                    if (mediaRouter.selectedRoute.id != mediaRouter.defaultRoute.id) {
-                        mediaRouter.selectRoute(mediaRouter.defaultRoute)
-                        AppLogger.i(LogCategory.CAST, TAG, "Reset MediaRouter to default route after timeout")
-                    }
-                } catch (_: Exception) {}
-                stopDiscovery(context)
-                releaseLocks()
+                stopCast(context)
                 onError?.invoke("Could not connect to $deviceName. Please check that it is powered on and on the same Wi-Fi.")
             }
         }

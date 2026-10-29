@@ -140,7 +140,7 @@ fun DebugLogsDialog(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "${logs.size} entries (${AppLogger.getLogs().size} total)",
+                                text = "${logs.size} shown (${AppLogger.getLogs().size} total • Max ${AppLogger.MAX_LOGS} / 24h)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

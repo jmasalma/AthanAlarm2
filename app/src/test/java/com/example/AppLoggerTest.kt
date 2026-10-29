@@ -74,17 +74,38 @@ class AppLoggerTest {
     }
 
     @Test
-    fun testAppLoggerCapacityCappedAt500() {
-        for (i in 1..550) {
+    fun testAppLoggerCapacityCappedAt250() {
+        for (i in 1..300) {
             AppLogger.i(LogCategory.SYSTEM, "TestTag", "Log entry #$i")
         }
 
         val allLogs = AppLogger.getLogs(LogCategory.ALL)
-        assertEquals(500, allLogs.size)
+        assertEquals(250, allLogs.size)
 
         // Oldest (1..50) should have been evicted; first element should be #51
         assertEquals("Log entry #51", allLogs.first().message)
-        assertEquals("Log entry #550", allLogs.last().message)
+        assertEquals("Log entry #300", allLogs.last().message)
+    }
+
+    @Test
+    fun testAppLoggerExpirationAfter24Hours() {
+        val now = System.currentTimeMillis()
+        val expiredTimestamp = now - (25 * 60 * 60 * 1000L) // 25 hours ago
+
+        AppLogger.addEntryForTesting(
+            com.example.util.LogEntry(
+                timestampMillis = expiredTimestamp,
+                level = LogLevel.INFO,
+                category = LogCategory.SYSTEM,
+                tag = "OldTag",
+                message = "Old expired log"
+            )
+        )
+        AppLogger.i(LogCategory.SYSTEM, "NewTag", "Recent log entry")
+
+        val currentLogs = AppLogger.getLogs(LogCategory.ALL)
+        assertEquals(1, currentLogs.size)
+        assertEquals("Recent log entry", currentLogs[0].message)
     }
 
     @Test
