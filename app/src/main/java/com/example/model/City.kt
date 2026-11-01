@@ -21,10 +21,56 @@ data class City(
         }
 
     /**
+     * Checks if this city or location is in the Province of Alberta, Canada.
+     * Evaluates via name/country, timezone identifier ("America/Edmonton"),
+     * known Alberta municipalities, or geographical coordinate bounding box.
+     */
+    fun isAlberta(): Boolean {
+        if (country.contains("Alberta", ignoreCase = true) || name.contains("Alberta", ignoreCase = true)) {
+            return true
+        }
+        if (timeZoneId.equals("America/Edmonton", ignoreCase = true)) {
+            return true
+        }
+        val lowerName = name.lowercase().trim()
+        if (lowerName == "calgary" || lowerName == "edmonton" || lowerName == "red deer" ||
+            lowerName == "lethbridge" || lowerName == "fort mcmurray" || lowerName == "banff" ||
+            lowerName == "medicine hat" || lowerName == "grande prairie" || lowerName == "airdrie" ||
+            lowerName == "st. albert" || lowerName == "spruce grove" || lowerName == "leduc" ||
+            lowerName == "cochrane" || lowerName == "okotoks" || lowerName == "canmore") {
+            return true
+        }
+        // Geographic coordinates bounding box for Alberta:
+        // Lat: 48.99° N to 60.01° N, Lon: -120.01° W to -109.99° W
+        if (latitude in 48.99..60.01 && longitude in -120.01..-109.99) {
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Determines whether permanent Alberta Time (ABT, UTC-6) is in effect for the given date.
+     * Alberta officially ended biannual clock changes effective November 1, 2026, staying
+     * permanently on UTC-6 year-round.
+     */
+    fun isAlbertaPermanentTimeActive(date: Calendar = Calendar.getInstance()): Boolean {
+        val year = date.get(Calendar.YEAR)
+        val month = date.get(Calendar.MONTH) // 0-based: Calendar.NOVEMBER is 10
+        val day = date.get(Calendar.DAY_OF_MONTH)
+        return year > 2026 || (year == 2026 && (month > Calendar.NOVEMBER || (month == Calendar.NOVEMBER && day >= 1)))
+    }
+
+    /**
      * Determines the effective UTC offset in hours for this city on a specific date,
-     * taking Daylight Saving Time (DST) into account.
+     * taking Daylight Saving Time (DST) and permanent time legislations into account.
      */
     fun getEffectiveTimezone(date: Calendar = Calendar.getInstance()): Double {
+        // Special Case: Alberta permanently moved to Alberta Time (ABT, UTC-6) on November 1, 2026.
+        // Standard Android/JVM tzdata may still return UTC-7 for America/Edmonton during winter months.
+        if (isAlberta() && isAlbertaPermanentTimeActive(date)) {
+            return -6.0
+        }
+
         if (timeZoneId.isNotBlank()) {
             try {
                 val tz = TimeZone.getTimeZone(timeZoneId)
@@ -83,8 +129,12 @@ data class City(
             City("Ottawa", "Ontario, Canada", 45.4215, -75.6972, -5.0, 70.0, "America/Toronto"),
             City("Montreal", "Quebec, Canada", 45.5017, -73.5673, -5.0, 36.0, "America/Toronto"),
             City("Quebec City", "Quebec, Canada", 46.8139, -71.2080, -5.0, 98.0, "America/Toronto"),
-            City("Calgary", "Alberta, Canada", 51.0447, -114.0719, -7.0, 1045.0, "America/Edmonton"),
-            City("Edmonton", "Alberta, Canada", 53.5461, -113.4938, -7.0, 671.0, "America/Edmonton"),
+            City("Calgary", "Alberta, Canada", 51.0447, -114.0719, -6.0, 1045.0, "America/Edmonton"),
+            City("Edmonton", "Alberta, Canada", 53.5461, -113.4938, -6.0, 671.0, "America/Edmonton"),
+            City("Red Deer", "Alberta, Canada", 52.2681, -113.8112, -6.0, 858.0, "America/Edmonton"),
+            City("Lethbridge", "Alberta, Canada", 49.6956, -112.8451, -6.0, 910.0, "America/Edmonton"),
+            City("Fort McMurray", "Alberta, Canada", 56.7264, -111.3803, -6.0, 243.0, "America/Edmonton"),
+            City("Banff", "Alberta, Canada", 51.1784, -115.5708, -6.0, 1383.0, "America/Edmonton"),
             City("Vancouver", "BC, Canada", 49.2827, -123.1207, -8.0, 70.0, "America/Vancouver"),
             City("Victoria", "BC, Canada", 48.4284, -123.3656, -8.0, 23.0, "America/Vancouver"),
             City("Winnipeg", "Manitoba, Canada", 49.8951, -97.1384, -6.0, 238.0, "America/Winnipeg"),

@@ -242,15 +242,16 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
             _uiState.value = _uiState.value.copy(isLocating = true)
             val loc = LocationHelper.getCurrentLocation(context)
             if (loc != null) {
-                val tzHours = java.util.TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
+                val isAlberta = (loc.latitude in 48.99..60.01 && loc.longitude in -120.01..-109.99)
+                val tzHours = if (isAlberta) -6.0 else java.util.TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
                 val gpsCity = City(
                     name = String.format(java.util.Locale.US, "GPS (%.2f°, %.2f°)", loc.latitude, loc.longitude),
-                    country = "Custom",
+                    country = if (isAlberta) "Alberta, Canada" else "Custom",
                     latitude = loc.latitude,
                     longitude = loc.longitude,
                     timezone = tzHours,
                     elevation = if (loc.hasAltitude()) loc.altitude else 0.0,
-                    timeZoneId = java.util.TimeZone.getDefault().id
+                    timeZoneId = if (isAlberta) "America/Edmonton" else java.util.TimeZone.getDefault().id
                 )
                 repository.updateCity(gpsCity)
                 val updated = _uiState.value.settings.copy(city = gpsCity)

@@ -67,16 +67,18 @@ object LocationHelper {
 
         // If reasonably close to a known city (< 0.8 degrees ~ 80km), return named city,
         // otherwise return a custom GPS location with device's local timezone.
-        val tzHours = TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
+        val isAlberta = (latitude in 48.99..60.01 && longitude in -120.01..-109.99)
+        val tzHours = if (isAlberta) -6.0 else TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
         return if (minDistance < 0.8) {
             closest
         } else {
             City(
                 name = "Current Location",
-                country = "GPS (%.2f°, %.2f°)".format(latitude, longitude),
+                country = if (isAlberta) "Alberta, Canada" else "GPS (%.2f°, %.2f°)".format(latitude, longitude),
                 latitude = latitude,
                 longitude = longitude,
-                timezone = tzHours
+                timezone = tzHours,
+                timeZoneId = if (isAlberta) "America/Edmonton" else TimeZone.getDefault().id
             )
         }
     }

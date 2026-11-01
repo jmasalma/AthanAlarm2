@@ -56,6 +56,7 @@ object PrayerCalculationEngine {
         offsets: Map<PrayerType, Int> = emptyMap(),
         dhuhrPrecautionMin: Int = 1
     ): PrayerCalculationResult {
+        val resolvedTz = normalizeTimezoneForAlberta(year, month, day, latitude, longitude, timezone)
         return try {
             calculateWithJitl(
                 year = year,
@@ -63,7 +64,7 @@ object PrayerCalculationEngine {
                 day = day,
                 latitude = latitude,
                 longitude = longitude,
-                timezone = timezone,
+                timezone = resolvedTz,
                 elevation = elevation,
                 methodEnum = method,
                 juristic = juristic,
@@ -78,7 +79,7 @@ object PrayerCalculationEngine {
                 day = day,
                 latitude = latitude,
                 longitude = longitude,
-                timezone = timezone,
+                timezone = resolvedTz,
                 elevation = elevation,
                 method = method,
                 juristic = juristic,
@@ -86,6 +87,28 @@ object PrayerCalculationEngine {
                 offsets = offsets,
                 dhuhrPrecautionMin = dhuhrPrecautionMin
             )
+        }
+    }
+
+    /**
+     * Normalizes UTC offset for locations in Alberta, Canada.
+     * Alberta officially ended biannual clock changes on November 1, 2026, permanently
+     * adopting Alberta Time (ABT, UTC-6).
+     */
+    fun normalizeTimezoneForAlberta(
+        year: Int,
+        month: Int,
+        day: Int,
+        latitude: Double,
+        longitude: Double,
+        timezone: Double
+    ): Double {
+        val isAlberta = (latitude in 48.99..60.01 && longitude in -120.01..-109.99)
+        val isPermanentTimeActive = year > 2026 || (year == 2026 && (month > 11 || (month == 11 && day >= 1)))
+        return if (isAlberta && isPermanentTimeActive && timezone == -7.0) {
+            -6.0
+        } else {
+            timezone
         }
     }
 

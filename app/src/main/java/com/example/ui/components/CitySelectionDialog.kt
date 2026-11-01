@@ -100,7 +100,8 @@ fun CitySelectionDialog(
                     if (loc.hasAltitude()) {
                         manualElev = loc.altitude.toInt().toString()
                     }
-                    val tzHours = TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
+                    val isAlberta = (loc.latitude in 48.99..60.01 && loc.longitude in -120.01..-109.99)
+                    val tzHours = if (isAlberta) -6.0 else TimeZone.getDefault().rawOffset / (1000.0 * 60.0 * 60.0)
                     manualTz = String.format(Locale.US, "%.1f", tzHours)
                     manualName = String.format(Locale.US, "GPS (%.2f°, %.2f°)", loc.latitude, loc.longitude)
                     manualError = ""
@@ -168,14 +169,16 @@ fun CitySelectionDialog(
             else -> defaultGpsLabel
         }
 
+        val isAlberta = (lat in 48.99..60.01 && lon in -120.01..-109.99)
+        val resolvedTz = if (isAlberta && tz == -7.0) -6.0 else tz
         val custom = City(
             name = resolvedName,
-            country = "Custom",
+            country = if (isAlberta) "Alberta, Canada" else "Custom",
             latitude = lat,
             longitude = lon,
-            timezone = tz,
+            timezone = resolvedTz,
             elevation = elev,
-            timeZoneId = TimeZone.getDefault().id
+            timeZoneId = if (isAlberta) "America/Edmonton" else TimeZone.getDefault().id
         )
         onCitySelected(custom)
         onDismiss()

@@ -84,7 +84,12 @@ class AppSettingsRepository(private val context: Context) {
         val country = pref[PreferencesKeys.CITY_COUNTRY] ?: City.DEFAULT.country
         val lat = pref[PreferencesKeys.LATITUDE] ?: City.DEFAULT.latitude
         val lon = pref[PreferencesKeys.LONGITUDE] ?: City.DEFAULT.longitude
-        val tz = pref[PreferencesKeys.TIMEZONE] ?: City.DEFAULT.timezone
+        val rawTz = pref[PreferencesKeys.TIMEZONE] ?: City.DEFAULT.timezone
+        val isStoredAlberta = (cityName.equals("Calgary", ignoreCase = true) ||
+                cityName.equals("Edmonton", ignoreCase = true) ||
+                country.contains("Alberta", ignoreCase = true) ||
+                (lat in 48.99..60.01 && lon in -120.01..-109.99))
+        val tz = if (isStoredAlberta && rawTz == -7.0) -6.0 else rawTz
         val elev = pref[PreferencesKeys.ELEVATION] ?: City.DEFAULT.elevation
 
         val calcMethod = CalculationMethod.entries.firstOrNull {
