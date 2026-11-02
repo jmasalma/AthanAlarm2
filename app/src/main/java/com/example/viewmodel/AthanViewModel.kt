@@ -372,6 +372,16 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
         }
     }
 
+    fun updatePrePrayerSound(context: Context, sound: String) {
+        viewModelScope.launch {
+            repository.updatePreReminderSound(sound)
+            val updated = _uiState.value.settings.copy(
+                prePrayerReminderSound = sound
+            )
+            AthanAlarmScheduler.scheduleNextAlarm(context, updated)
+        }
+    }
+
     fun updateCastEnabled(enabled: Boolean) {
         viewModelScope.launch {
             repository.updateCastEnabled(enabled)

@@ -45,6 +45,7 @@ data class AppSettings(
     val athanSound: String = "chime", // "chime" (default ding/ping), "adhan", "system_notification", "system_alarm", or ringtone URI
     val prePrayerReminderEnabled: Boolean = false,
     val prePrayerReminderMinutes: Int = 20,
+    val prePrayerReminderSound: String = "chime", // "chime", "system_notification", "system_alarm", "silent", or ringtone/MP3 URI
     val hijriDayOffset: Int = 0,
     val castEnabled: Boolean = false,
     val castDeviceId: String? = null,
@@ -69,6 +70,7 @@ class AppSettingsRepository(private val context: Context) {
         val ATHAN_SOUND = stringPreferencesKey("athan_sound")
         val PRE_REMINDER_ENABLED = booleanPreferencesKey("pre_reminder_enabled")
         val PRE_REMINDER_MINUTES = intPreferencesKey("pre_reminder_minutes")
+        val PRE_REMINDER_SOUND = stringPreferencesKey("pre_reminder_sound")
         val HIJRI_DAY_OFFSET = intPreferencesKey("hijri_day_offset")
         val CAST_ENABLED = booleanPreferencesKey("cast_enabled")
         val CAST_DEVICE_ID = stringPreferencesKey("cast_device_id")
@@ -108,6 +110,7 @@ class AppSettingsRepository(private val context: Context) {
         val sound = pref[PreferencesKeys.ATHAN_SOUND] ?: "chime"
         val preReminder = pref[PreferencesKeys.PRE_REMINDER_ENABLED] ?: false
         val preMinutes = pref[PreferencesKeys.PRE_REMINDER_MINUTES] ?: 20
+        val preSound = pref[PreferencesKeys.PRE_REMINDER_SOUND] ?: "chime"
         val hijriOffset = pref[PreferencesKeys.HIJRI_DAY_OFFSET] ?: 0
 
         val alarmModes = PrayerType.entries.associateWith { type ->
@@ -143,6 +146,7 @@ class AppSettingsRepository(private val context: Context) {
             athanSound = sound,
             prePrayerReminderEnabled = preReminder,
             prePrayerReminderMinutes = preMinutes,
+            prePrayerReminderSound = preSound,
             hijriDayOffset = hijriOffset,
             castEnabled = castEnabled,
             castDeviceId = castDeviceId,
@@ -195,6 +199,12 @@ class AppSettingsRepository(private val context: Context) {
         context.dataStore.edit {
             it[PreferencesKeys.PRE_REMINDER_ENABLED] = enabled
             it[PreferencesKeys.PRE_REMINDER_MINUTES] = minutes
+        }
+    }
+
+    suspend fun updatePreReminderSound(sound: String) {
+        context.dataStore.edit {
+            it[PreferencesKeys.PRE_REMINDER_SOUND] = sound
         }
     }
 

@@ -26,6 +26,7 @@ object AthanAlarmScheduler {
     const val EXTRA_ATHAN_SOUND = "extra_athan_sound"
     const val EXTRA_PRAYER_TIME_MILLIS = "extra_prayer_time_millis"
     const val EXTRA_PRE_MINUTES = "extra_pre_minutes"
+    const val EXTRA_PRE_SOUND = "extra_pre_sound"
 
     private const val ALARM_REQUEST_CODE = 1001
     private const val PRE_ALARM_REQUEST_CODE = 1003
@@ -138,6 +139,7 @@ object AthanAlarmScheduler {
                     action = ACTION_PRE_PRAYER_ALERT
                     putExtra(EXTRA_PRAYER_NAME, nextType.name)
                     putExtra(EXTRA_PRE_MINUTES, settings.prePrayerReminderMinutes)
+                    putExtra(EXTRA_PRE_SOUND, settings.prePrayerReminderSound)
                     putExtra(EXTRA_PRAYER_TIME_MILLIS, nextCal.timeInMillis)
                 }
                 val prePendingIntent = PendingIntent.getBroadcast(

@@ -94,6 +94,35 @@ import com.example.ui.theme.GoldPrimary
 import com.example.viewmodel.AthanUiState
 import com.example.viewmodel.AthanViewModel
 
+fun formatSoundDisplayName(context: Context, sound: String): String {
+    return when {
+        sound == "chime" -> "Gentle Ding / Chime (Default)"
+        sound == "adhan" || sound == "athan" -> "Athan"
+        sound == "system_notification" -> "System Notification Sound"
+        sound == "system_alarm" -> "System Alarm Ringtone"
+        sound == "silent" -> "Silent (Vibration Only)"
+        sound.startsWith("custom_file:") || sound.startsWith("file://") -> {
+            val path = if (sound.startsWith("custom_file:")) sound.removePrefix("custom_file:") else Uri.parse(sound).path ?: ""
+            val rawName = File(path).name
+            val originalName = if (rawName.startsWith("custom_") && rawName.indexOf('_', 7) != -1) {
+                rawName.substring(rawName.indexOf('_', 7) + 1)
+            } else {
+                rawName
+            }
+            "Custom MP3: $originalName"
+        }
+        sound.startsWith("content://") -> {
+            try {
+                val title = RingtoneManager.getRingtone(context, Uri.parse(sound))?.getTitle(context)
+                if (!title.isNullOrBlank()) "System: $title" else "Custom Audio"
+            } catch (_: Exception) {
+                "Custom Audio"
+            }
+        }
+        else -> "Gentle Ding / Chime (Default)"
+    }
+}
+
 @Composable
 fun SettingsScreen(
     uiState: AthanUiState,
@@ -108,6 +137,7 @@ fun SettingsScreen(
     var showHijriOffsetDialog by remember { mutableStateOf(false) }
     var showBatteryGuide by remember { mutableStateOf(false) }
     var showPreAlertMinutesDialog by remember { mutableStateOf(false) }
+    var showPreAlertSoundDialog by remember { mutableStateOf(false) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
     var showCastDeviceDialog by remember { mutableStateOf(false) }
     var showCastSoundDialog by remember { mutableStateOf(false) }
@@ -230,41 +260,7 @@ fun SettingsScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column {
-                    val soundSubtitle = when {
-                        uiState.settings.athanSound == "chime" -> "Gentle Ding / Chime (Default)"
-                        uiState.settings.athanSound == "adhan" || uiState.settings.athanSound == "athan" -> "Athan"
-                        uiState.settings.athanSound == "system_notification" -> "System Notification Sound"
-                        uiState.settings.athanSound == "system_alarm" -> "System Alarm Ringtone"
-                        uiState.settings.athanSound.startsWith("custom_file:") -> {
-                            val path = uiState.settings.athanSound.removePrefix("custom_file:")
-                            val rawName = File(path).name
-                            val originalName = if (rawName.startsWith("custom_") && rawName.indexOf('_', 7) != -1) {
-                                rawName.substring(rawName.indexOf('_', 7) + 1)
-                            } else {
-                                rawName
-                            }
-                            "Custom MP3: $originalName"
-                        }
-                        uiState.settings.athanSound.startsWith("file://") -> {
-                            val path = Uri.parse(uiState.settings.athanSound).path ?: ""
-                            val rawName = File(path).name
-                            val originalName = if (rawName.startsWith("custom_") && rawName.indexOf('_', 7) != -1) {
-                                rawName.substring(rawName.indexOf('_', 7) + 1)
-                            } else {
-                                rawName
-                            }
-                            "Custom MP3: $originalName"
-                        }
-                        uiState.settings.athanSound.startsWith("content://") -> {
-                            try {
-                                val title = RingtoneManager.getRingtone(context, Uri.parse(uiState.settings.athanSound))?.getTitle(context)
-                                if (!title.isNullOrBlank()) "System: $title" else "Custom Audio"
-                            } catch (_: Exception) {
-                                "Custom Audio"
-                            }
-                        }
-                        else -> "Gentle Ding / Chime (Default)"
-                    }
+                    val soundSubtitle = formatSoundDisplayName(context, uiState.settings.athanSound)
                     SettingsClickableItem(
                         icon = Icons.Default.MusicNote,
                         title = "Athan / Alert Sound",
@@ -277,7 +273,6 @@ fun SettingsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { showPreAlertMinutesDialog = true }
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -312,6 +307,30 @@ fun SettingsScreen(
                                 viewModel.updatePrePrayerAlert(context, it, uiState.settings.prePrayerReminderMinutes)
                             },
                             modifier = Modifier.testTag("pre_prayer_switch")
+                        )
+                    }
+
+                    if (uiState.settings.prePrayerReminderEnabled) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 54.dp),
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+                        )
+                        SettingsClickableItem(
+                            icon = Icons.Default.AccessTime,
+                            title = "Reminder Lead Time",
+                            subtitle = "${uiState.settings.prePrayerReminderMinutes} minutes before prayer",
+                            onClick = { showPreAlertMinutesDialog = true }
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 54.dp),
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+                        )
+                        val preSoundSubtitle = formatSoundDisplayName(context, uiState.settings.prePrayerReminderSound)
+                        SettingsClickableItem(
+                            icon = Icons.Default.MusicNote,
+                            title = "Pre-Alert Sound / Noise",
+                            subtitle = preSoundSubtitle,
+                            onClick = { showPreAlertSoundDialog = true }
                         )
                     }
 
@@ -703,6 +722,20 @@ fun SettingsScreen(
         )
     }
 
+    if (showPreAlertSoundDialog) {
+        AthanSoundDialog(
+            currentSound = uiState.settings.prePrayerReminderSound,
+            title = "Pre-Alert Notification Sound",
+            allowAthan = false,
+            allowSilent = true,
+            onSelect = { sound ->
+                viewModel.updatePrePrayerSound(context, sound)
+                showPreAlertSoundDialog = false
+            },
+            onDismiss = { showPreAlertSoundDialog = false }
+        )
+    }
+
     if (showCastDeviceDialog) {
         CastDeviceSelectionDialog(
             context = context,
@@ -950,6 +983,9 @@ private fun saveCustomAudioUri(context: Context, sourceUri: Uri): String? {
 @Composable
 fun AthanSoundDialog(
     currentSound: String,
+    title: String = "Choose Alert Sound",
+    allowAthan: Boolean = true,
+    allowSilent: Boolean = false,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1003,6 +1039,10 @@ fun AthanSoundDialog(
 
     fun playPreview(soundId: String) {
         previewPlayer?.release()
+        if (soundId == "silent") {
+            playingSoundId = null
+            return
+        }
         if (playingSoundId == soundId || (soundId == "athan" && playingSoundId == "adhan")) {
             playingSoundId = null
             return
@@ -1104,19 +1144,26 @@ fun AthanSoundDialog(
         } else null
     }
 
-    val standardOptions = listOf(
-        "chime" to "Gentle Ding / Chime (Default)",
-        "athan" to "Athan",
-        "system_notification" to "System Notification Sound (Ding/Ping)",
-        "system_alarm" to "System Alarm Ringtone"
-    )
+    val standardOptions = remember(allowAthan, allowSilent) {
+        buildList {
+            add("chime" to "Gentle Ding / Chime (Default)")
+            if (allowAthan) {
+                add("athan" to "Athan")
+            }
+            add("system_notification" to "System Notification Sound (Ding/Ping)")
+            add("system_alarm" to "System Alarm Ringtone")
+            if (allowSilent) {
+                add("silent" to "Silent (Vibration Only)")
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = {
             previewPlayer?.release()
             onDismiss()
         },
-        title = { Text("Choose Alert Sound") },
+        title = { Text(title) },
         text = {
             LazyColumn {
                 items(standardOptions) { (id, label) ->
@@ -1155,16 +1202,18 @@ fun AthanSoundDialog(
                             )
                         }
 
-                        IconButton(onClick = { playPreview(id) }) {
-                            Icon(
-                                imageVector = if (playingSoundId == id || (id == "athan" && playingSoundId == "adhan")) {
-                                    Icons.Default.Stop
-                                } else {
-                                    Icons.Default.PlayArrow
-                                },
-                                contentDescription = "Preview",
-                                tint = GoldPrimary
-                            )
+                        if (id != "silent") {
+                            IconButton(onClick = { playPreview(id) }) {
+                                Icon(
+                                    imageVector = if (playingSoundId == id || (id == "athan" && playingSoundId == "adhan")) {
+                                        Icons.Default.Stop
+                                    } else {
+                                        Icons.Default.PlayArrow
+                                    },
+                                    contentDescription = "Preview",
+                                    tint = GoldPrimary
+                                )
+                            }
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))

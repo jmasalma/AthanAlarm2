@@ -42,6 +42,7 @@ class AthanSettingsRepositoryTest {
         assertFalse("Pre-prayer reminder must be disabled by default", settings.prePrayerReminderEnabled)
         assertEquals(20, settings.prePrayerReminderMinutes)
         assertEquals("chime", settings.athanSound)
+        assertEquals("chime", settings.prePrayerReminderSound)
         assertFalse("Chromecast casting must be disabled by default", settings.castEnabled)
         assertEquals(null, settings.castDeviceId)
         assertEquals(null, settings.castDeviceName)
@@ -77,11 +78,13 @@ class AthanSettingsRepositoryTest {
 
         repository.updateAthanSound("athan")
         repository.updatePreReminder(enabled = true, minutes = 15)
+        repository.updatePreReminderSound("system_notification")
 
         val updated = repository.settingsFlow.first()
         assertEquals("athan", updated.athanSound)
         assertTrue(updated.prePrayerReminderEnabled)
         assertEquals(15, updated.prePrayerReminderMinutes)
+        assertEquals("system_notification", updated.prePrayerReminderSound)
     }
 
     @Test

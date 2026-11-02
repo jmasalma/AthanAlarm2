@@ -6,6 +6,10 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -16,6 +20,8 @@ import com.example.model.AlarmMode
 import com.example.model.PrayerType
 import com.example.util.AppLogger
 import com.example.util.LogCategory
+import java.io.File
+import java.io.FileInputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -70,13 +76,19 @@ class AthanAlarmReceiver : BroadcastReceiver() {
     private fun handlePrePrayerAlert(context: Context, intent: Intent) {
         val prayerName = intent.getStringExtra(AthanAlarmScheduler.EXTRA_PRAYER_NAME) ?: "Prayer"
         val preMinutes = intent.getIntExtra(AthanAlarmScheduler.EXTRA_PRE_MINUTES, 20)
+        val soundChoice = intent.getStringExtra(AthanAlarmScheduler.EXTRA_PRE_SOUND) ?: "chime"
         val prayerTimeMillis = intent.getLongExtra(
             AthanAlarmScheduler.EXTRA_PRAYER_TIME_MILLIS,
             System.currentTimeMillis() + (preMinutes * 60 * 1000L)
         )
 
-        AppLogger.i(LogCategory.ALARM, TAG, "Posting pre-prayer alert notification for $prayerName (~$preMinutes min before)")
+        AppLogger.i(LogCategory.ALARM, TAG, "Posting pre-prayer alert notification for $prayerName (~$preMinutes min before, sound: $soundChoice)")
         createPreAlertChannel(context)
+
+        // Play the chosen pre-prayer notification sound if not set to silent
+        if (soundChoice != "silent") {
+            playPreAlertSound(context, soundChoice)
+        }
 
         val openAppIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -159,9 +171,79 @@ class AthanAlarmReceiver : BroadcastReceiver() {
             ).apply {
                 description = "Countdown alerts 10-30 minutes prior to prayer"
                 enableVibration(true)
+                setSound(null, null) // Custom/dynamic sound played via playPreAlertSound
             }
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun playPreAlertSound(context: Context, soundChoice: String) {
+        try {
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
+            val filePath = when {
+                soundChoice.startsWith("custom_file:") -> soundChoice.removePrefix("custom_file:")
+                soundChoice.startsWith("file://") -> Uri.parse(soundChoice).path
+                else -> null
+            }
+
+            if (filePath != null) {
+                val file = File(filePath)
+                if (file.exists()) {
+                    FileInputStream(file).use { fis ->
+                        MediaPlayer().apply {
+                            setAudioAttributes(audioAttributes)
+                            setDataSource(fis.fd)
+                            setOnCompletionListener { it.release() }
+                            setOnErrorListener { mp, _, _ ->
+                                mp.release()
+                                true
+                            }
+                            prepare()
+                            start()
+                        }
+                    }
+                    return
+                }
+            }
+
+            val audioUri: Uri = when {
+                soundChoice.startsWith("content://") || soundChoice.startsWith("file://") -> {
+                    Uri.parse(soundChoice)
+                }
+                soundChoice == "system_notification" -> {
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                }
+                soundChoice == "system_alarm" -> {
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                }
+                soundChoice == "chime" -> {
+                    Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}")
+                }
+                else -> {
+                    Uri.parse("android.resource://${context.packageName}/${R.raw.athan_chime}")
+                }
+            }
+
+            MediaPlayer().apply {
+                setAudioAttributes(audioAttributes)
+                setDataSource(context, audioUri)
+                setOnCompletionListener { it.release() }
+                setOnErrorListener { mp, _, _ ->
+                    mp.release()
+                    true
+                }
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            AppLogger.e(LogCategory.ALARM, TAG, "Failed to play pre-prayer alert sound ($soundChoice): ${e.message}", e)
         }
     }
 }
