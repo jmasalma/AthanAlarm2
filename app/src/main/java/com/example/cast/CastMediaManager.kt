@@ -35,6 +35,9 @@ object CastMediaManager {
     val isCastingFlow: StateFlow<Boolean> = _isCastingFlow.asStateFlow()
 
     @Volatile
+    private var isCastInProgress = false
+
+    @Volatile
     private var isSessionConnected = false
 
     private var pendingMediaInfo: MediaInfo? = null
@@ -211,23 +214,29 @@ object CastMediaManager {
             AppLogger.w(LogCategory.CAST, TAG, "MediaRouter.selectRoute error: ${e.message}")
         }
 
-        // Explicitly trigger session start on Google Play Services Cast SessionManager
-        // This is critical when waking from background / Doze where MediaRouter listeners alone can fail to propagate
-        try {
-            val startSessionIntent = Intent().apply {
-                putExtra("CAST_INTENT_TO_CAST_ROUTE_ID_KEY", targetRoute.id)
-                putExtra("CAST_INTENT_TO_CAST_DEVICE_NAME_KEY", targetRoute.name)
-                putExtra("CAST_INTENT_TO_CAST_NO_TOAST_KEY", true)
+        // Schedule delayed explicit startSession fallback ONLY if mediaRouter.selectRoute did not initiate a session.
+        // Calling startSession simultaneously while MediaRouter is already starting causes Google Play Services to abort with code 2158!
+        mainHandler.postDelayed({
+            if (!isCastInProgress || isSessionConnected) return@postDelayed
+            val curSession = castContext?.sessionManager?.currentCastSession
+            if (curSession == null || (!curSession.isConnected && !curSession.isConnecting && !curSession.isResuming)) {
+                try {
+                    AppLogger.i(
+                        LogCategory.CAST,
+                        TAG,
+                        "Explicit startSession fallback triggered for ${targetRoute.name} (session not starting via MediaRouter)"
+                    )
+                    val startSessionIntent = Intent().apply {
+                        putExtra("CAST_INTENT_TO_CAST_ROUTE_ID_KEY", targetRoute.id)
+                        putExtra("CAST_INTENT_TO_CAST_DEVICE_NAME_KEY", targetRoute.name)
+                        putExtra("CAST_INTENT_TO_CAST_NO_TOAST_KEY", true)
+                    }
+                    castContext?.sessionManager?.startSession(startSessionIntent)
+                } catch (e: Exception) {
+                    AppLogger.w(LogCategory.CAST, TAG, "Error calling sessionManager.startSession fallback: ${e.message}")
+                }
             }
-            castContext?.sessionManager?.startSession(startSessionIntent)
-            AppLogger.i(
-                LogCategory.CAST,
-                TAG,
-                "Explicitly invoked castContext.sessionManager.startSession for: ${targetRoute.name}"
-            )
-        } catch (e: Exception) {
-            AppLogger.w(LogCategory.CAST, TAG, "Error calling sessionManager.startSession: ${e.message}")
-        }
+        }, 1500L)
     }
 
     /**
@@ -242,7 +251,8 @@ object CastMediaManager {
         onStarted: (() -> Unit)? = null,
         onError: ((String) -> Unit)? = null
     ) {
-        _isCastingFlow.value = true
+        isCastInProgress = true
+        _isCastingFlow.value = false
         isSessionConnected = false
         hasInitiatedSelection = false
         acquireLocks(context)
@@ -292,7 +302,7 @@ object CastMediaManager {
                             AppLogger.i(LogCategory.CAST, TAG, "Adjusted Cast volume from <15% to 50%")
                         }
                     } catch (_: Exception) {}
-                    loadMediaOnSession(currentSession, mediaInfo, onStarted, onError)
+                    loadMediaOnSession(context, currentSession, mediaInfo, onStarted, onError)
                     return@post
                 }
 
@@ -300,7 +310,7 @@ object CastMediaManager {
                 if (currentSession != null && (currentSession.isConnecting || currentSession.isResuming)) {
                     AppLogger.i(LogCategory.CAST, TAG, "Existing CastSession is connecting/resuming. Waiting for connection...")
                     pendingMediaInfo = mediaInfo
-                    attachSessionListener(castContext, onStarted, onError)
+                    attachSessionListener(context, castContext, onStarted, onError)
                     startTimeoutWatchdog(context, castContext, targetDeviceName ?: "Google Cast speaker", onError)
                     return@post
                 }
@@ -392,6 +402,7 @@ object CastMediaManager {
 
                 if (castContext == null) {
                     AppLogger.e(LogCategory.CAST, TAG, "CastContext is null; Google Play Services Cast unavailable")
+                    isCastInProgress = false
                     _isCastingFlow.value = false
                     releaseLocks()
                     onError?.invoke("Google Cast service is not available on this device.")
@@ -399,7 +410,7 @@ object CastMediaManager {
                 }
 
                 pendingMediaInfo = mediaInfo
-                attachSessionListener(castContext, onStarted, onError)
+                attachSessionListener(context, castContext, onStarted, onError)
 
                 var lastSelectionAttemptTime = 0L
                 var selectedTargetRouteId: String? = null
@@ -429,7 +440,7 @@ object CastMediaManager {
                     if (!hasInitiatedSelection) {
                         cancelPendingSelection()
                         val r = Runnable {
-                            if (!_isCastingFlow.value || isSessionConnected || hasInitiatedSelection) return@Runnable
+                            if (!isCastInProgress || isSessionConnected || hasInitiatedSelection) return@Runnable
                             val curSession = castContext.sessionManager.currentCastSession
                             if (curSession != null && (curSession.isConnected || curSession.isConnecting || curSession.isResuming)) return@Runnable
                             val freshTarget = findTargetRoute() ?: route
@@ -534,7 +545,7 @@ object CastMediaManager {
                         val curSession = castContext.sessionManager.currentCastSession
                         val isSessionAlive = curSession != null && (curSession.isConnected || curSession.isConnecting || curSession.isResuming)
 
-                        if (isSessionConnected || !_isCastingFlow.value) {
+                        if (isSessionConnected || !isCastInProgress) {
                             AppLogger.i(LogCategory.CAST, TAG, "Casting session connected or ended. Stopping poll monitoring.")
                             activePollRunnable = null
                             return
@@ -587,7 +598,7 @@ object CastMediaManager {
                                 } catch (_: Exception) {}
 
                                 mainHandler.postDelayed({
-                                    if (!_isCastingFlow.value || isSessionConnected) return@postDelayed
+                                    if (!isCastInProgress || isSessionConnected) return@postDelayed
                                     val freshCur = castContext.sessionManager.currentCastSession
                                     if (freshCur != null && (freshCur.isConnected || freshCur.isConnecting || freshCur.isResuming)) return@postDelayed
 
@@ -667,6 +678,7 @@ object CastMediaManager {
     }
 
     private fun loadMediaOnSession(
+        context: Context,
         session: CastSession,
         mediaInfo: MediaInfo,
         onStarted: (() -> Unit)?,
@@ -676,6 +688,7 @@ object CastMediaManager {
         val remoteClient = session.remoteMediaClient
         if (remoteClient == null) {
             AppLogger.e(LogCategory.CAST, TAG, "Remote media client is null on connected CastSession")
+            isCastInProgress = false
             onError?.invoke("Remote media client is unavailable on the connected speaker")
             return
         }
@@ -690,6 +703,7 @@ object CastMediaManager {
                     if (playerState == MediaStatus.PLAYER_STATE_IDLE && status.idleReason != MediaStatus.IDLE_REASON_NONE) {
                         AppLogger.i(LogCategory.CAST, TAG, "Remote media client completed/idle (reason=${status.idleReason}). Setting isCasting=false")
                         _isCastingFlow.value = false
+                        isCastInProgress = false
                     }
                 }
             }
@@ -697,13 +711,30 @@ object CastMediaManager {
         remoteClientCallback = callback
         remoteClient.registerCallback(callback)
 
+        // Check if mediaInfo streamUrl was loopback (127.0.0.1) when server was initially started; if so, refresh with current local Wi-Fi IP
+        val targetMediaInfo = if (mediaInfo.contentId?.contains("127.0.0.1") == true) {
+            val freshUrl = localHttpServer.getStreamUrl(context)
+            if (!freshUrl.contains("127.0.0.1")) {
+                AppLogger.i(LogCategory.CAST, TAG, "Refreshing loopback stream URL to active Wi-Fi IP: $freshUrl")
+                MediaInfo.Builder(freshUrl)
+                    .setContentType(mediaInfo.contentType ?: "audio/mpeg")
+                    .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                    .setMetadata(mediaInfo.metadata)
+                    .build()
+            } else {
+                mediaInfo
+            }
+        } else {
+            mediaInfo
+        }
+
         val options = MediaLoadOptions.Builder()
             .setAutoplay(true)
             .setPlayPosition(0)
             .build()
 
-        AppLogger.i(LogCategory.CAST, TAG, "Loading MediaInfo into RemoteMediaClient...")
-        val pendingResult = remoteClient.load(mediaInfo, options)
+        AppLogger.i(LogCategory.CAST, TAG, "Loading MediaInfo into RemoteMediaClient (${targetMediaInfo.contentId})...")
+        val pendingResult = remoteClient.load(targetMediaInfo, options)
         pendingResult.setResultCallback { result ->
             if (result.status.isSuccess) {
                 AppLogger.i(LogCategory.CAST, TAG, "Media successfully loaded and playing on Cast device!")
@@ -714,12 +745,14 @@ object CastMediaManager {
                 AppLogger.e(LogCategory.CAST, TAG, "Cast media load failed with status code: ${result.status.statusCode}")
                 _isCastingFlow.value = false
                 isSessionConnected = false
+                isCastInProgress = false
                 onError?.invoke("Cast speaker playback error (code: ${result.status.statusCode})")
             }
         }
     }
 
     private fun attachSessionListener(
+        context: Context,
         castContext: CastContext,
         onStarted: (() -> Unit)?,
         onError: ((String) -> Unit)?
@@ -747,7 +780,7 @@ object CastMediaManager {
 
                 val media = pendingMediaInfo
                 if (media != null) {
-                    loadMediaOnSession(session, media, onStarted, onError)
+                    loadMediaOnSession(context, session, media, onStarted, onError)
                     pendingMediaInfo = null
                 }
             }
@@ -755,9 +788,21 @@ object CastMediaManager {
             override fun onSessionEnded(session: CastSession, error: Int) {
                 AppLogger.i(LogCategory.CAST, TAG, "Cast session ended (code: $error)")
                 cancelTimeoutWatchdog()
+                val mediaNeverLoaded = (pendingMediaInfo != null)
                 isSessionConnected = false
                 _isCastingFlow.value = false
                 detachSessionListener(castContext)
+
+                if (mediaNeverLoaded && isCastInProgress) {
+                    AppLogger.w(
+                        LogCategory.CAST,
+                        TAG,
+                        "Cast session ended before media playback could start (code: $error)"
+                    )
+                    isCastInProgress = false
+                    stopCast(context)
+                    onError?.invoke("Cast session ended unexpectedly before playback started (error $error).")
+                }
             }
 
             override fun onSessionStartFailed(session: CastSession, error: Int) {
@@ -765,19 +810,27 @@ object CastMediaManager {
                 cancelTimeoutWatchdog()
                 isSessionConnected = false
                 _isCastingFlow.value = false
+                isCastInProgress = false
                 detachSessionListener(castContext)
+                stopCast(context)
                 onError?.invoke("Could not connect to Google Home speaker (error $error). Check Wi-Fi connection.")
             }
 
             override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
                 AppLogger.i(LogCategory.CAST, TAG, "Cast session resumed")
-                _isCastingFlow.value = true
             }
 
             override fun onSessionResumeFailed(session: CastSession, error: Int) {
                 AppLogger.w(LogCategory.CAST, TAG, "Cast session resume failed: error $error")
+                val mediaNeverLoaded = (pendingMediaInfo != null)
+                isSessionConnected = false
                 _isCastingFlow.value = false
                 detachSessionListener(castContext)
+                if (mediaNeverLoaded && isCastInProgress) {
+                    isCastInProgress = false
+                    stopCast(context)
+                    onError?.invoke("Cast session resume failed (error $error).")
+                }
             }
 
             override fun onSessionEnding(session: CastSession) {
@@ -810,6 +863,7 @@ object CastMediaManager {
     fun stopCast(context: Context) {
         cancelTimeoutWatchdog()
         hasInitiatedSelection = false
+        isCastInProgress = false
         pendingSelectionRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingSelectionRunnable = null
         activePollRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -818,7 +872,7 @@ object CastMediaManager {
 
         mainHandler.post {
             try {
-                if (!_isCastingFlow.value && !isSessionConnected && pendingMediaInfo == null) {
+                if (!isCastInProgress && !_isCastingFlow.value && !isSessionConnected && pendingMediaInfo == null) {
                     releaseLocks()
                     return@post
                 }
@@ -854,6 +908,7 @@ object CastMediaManager {
                 localHttpServer.stop()
                 isSessionConnected = false
                 _isCastingFlow.value = false
+                isCastInProgress = false
                 pendingMediaInfo = null
                 releaseLocks()
             }

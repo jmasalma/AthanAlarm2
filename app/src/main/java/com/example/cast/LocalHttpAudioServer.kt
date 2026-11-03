@@ -151,6 +151,15 @@ class LocalHttpAudioServer {
     }
 
     /**
+     * Gets current stream URL, re-resolving IP if necessary.
+     */
+    fun getStreamUrl(context: Context? = null): String {
+        val ip = getLocalIpAddress(context)
+        val ext = if (contentType.contains("wav")) "wav" else "mp3"
+        return "http://$ip:$port/athan.$ext"
+    }
+
+    /**
      * Starts the server from a stream supplier (reads entire stream into memory for fast, reliable serving).
      */
     @Synchronized
