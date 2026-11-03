@@ -1,6 +1,7 @@
 package com.example.cast
 
 import android.content.Context
+import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
@@ -122,7 +123,7 @@ object CastMediaManager {
                             AppLogger.i(LogCategory.CAST, TAG, "Route discovered: ${route.name} (ID: ${route.id})")
                         }
                         override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                            AppLogger.i(LogCategory.CAST, TAG, "Route changed: ${route.name} (ID: ${route.id})")
+                            // Suppress repetitive logging on frequent route property updates
                         }
                         override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
                             AppLogger.i(LogCategory.CAST, TAG, "Discovery cb onRouteSelected: ${route.name} (reason=$reason)")
@@ -194,23 +195,38 @@ object CastMediaManager {
     }
 
     private fun triggerRouteSelection(
+        castContext: CastContext?,
         mediaRouter: MediaRouter,
         selector: MediaRouteSelector,
         targetRoute: MediaRouter.RouteInfo
     ) {
-        if (mediaRouter.selectedRoute.id == targetRoute.id) {
-            AppLogger.i(
-                LogCategory.CAST,
-                TAG,
-                "Target route is already selected in MediaRouter: ${targetRoute.name} (${targetRoute.id})"
-            )
-        } else {
-            AppLogger.i(
-                LogCategory.CAST,
-                TAG,
-                "Selecting target route in MediaRouter: ${targetRoute.name} (${targetRoute.id})"
-            )
+        AppLogger.i(
+            LogCategory.CAST,
+            TAG,
+            "Selecting target route: ${targetRoute.name} (${targetRoute.id}) [currentlySelected=${mediaRouter.selectedRoute.name}]"
+        )
+        try {
             mediaRouter.selectRoute(targetRoute)
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.CAST, TAG, "MediaRouter.selectRoute error: ${e.message}")
+        }
+
+        // Explicitly trigger session start on Google Play Services Cast SessionManager
+        // This is critical when waking from background / Doze where MediaRouter listeners alone can fail to propagate
+        try {
+            val startSessionIntent = Intent().apply {
+                putExtra("CAST_INTENT_TO_CAST_ROUTE_ID_KEY", targetRoute.id)
+                putExtra("CAST_INTENT_TO_CAST_DEVICE_NAME_KEY", targetRoute.name)
+                putExtra("CAST_INTENT_TO_CAST_NO_TOAST_KEY", true)
+            }
+            castContext?.sessionManager?.startSession(startSessionIntent)
+            AppLogger.i(
+                LogCategory.CAST,
+                TAG,
+                "Explicitly invoked castContext.sessionManager.startSession for: ${targetRoute.name}"
+            )
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.CAST, TAG, "Error calling sessionManager.startSession: ${e.message}")
         }
     }
 
@@ -287,6 +303,14 @@ object CastMediaManager {
                     attachSessionListener(castContext, onStarted, onError)
                     startTimeoutWatchdog(context, castContext, targetDeviceName ?: "Google Cast speaker", onError)
                     return@post
+                }
+
+                // 3. If an existing session is in any other state (disconnected/suspended/stale), end it cleanly before proceeding
+                if (currentSession != null || castContext?.sessionManager?.currentSession != null) {
+                    AppLogger.i(LogCategory.CAST, TAG, "Ending stale/inactive CastSession before starting fresh session...")
+                    try {
+                        castContext?.sessionManager?.endCurrentSession(true)
+                    } catch (_: Exception) {}
                 }
 
                 val mediaRouter = MediaRouter.getInstance(context)
@@ -397,7 +421,7 @@ object CastMediaManager {
                         TAG,
                         "Selecting target route via $source: ${route.name} (${route.id}) [hasCastDevice=${castDev != null}]"
                     )
-                    triggerRouteSelection(mediaRouter, selector, route)
+                    triggerRouteSelection(castContext, mediaRouter, selector, route)
                     startTimeoutWatchdog(context, castContext, route.name, onError)
                 }
 
@@ -447,25 +471,26 @@ object CastMediaManager {
                     }
 
                     override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                        val castDev = getCastDevice(route)
                         val valid = isValidCastTarget(route)
-                        AppLogger.i(
-                            LogCategory.CAST,
-                            TAG,
-                            "onRouteChanged: ${route.name} (${route.id}) [valid=$valid, hasCastDevice=${castDev != null}]"
-                        )
                         if (!valid) return
 
-                        // If selection has not been initiated yet and route matches target
+                        // If selection has not been initiated yet and route matches target, trigger selection cleanly without log spam
                         if (!hasInitiatedSelection) {
                             if (targetIds.size > 1 && isGroupRoute(route) && route.matchesSelector(selector)) {
+                                val castDev = getCastDevice(route)
                                 AppLogger.i(
                                     LogCategory.CAST,
                                     TAG,
-                                    "Multi-device target configured; auto-selecting Speaker Group: ${route.name}"
+                                    "Target Speaker Group matched onRouteChanged: ${route.name} (${route.id}) [hasCastDev=${castDev != null}]"
                                 )
                                 doSelectRoute(route, "onRouteChanged(group)")
                             } else if (isRouteTargetMatch(route)) {
+                                val castDev = getCastDevice(route)
+                                AppLogger.i(
+                                    LogCategory.CAST,
+                                    TAG,
+                                    "Target route matched onRouteChanged: ${route.name} (${route.id}) [hasCastDev=${castDev != null}]"
+                                )
                                 doSelectRoute(route, "onRouteChanged(match)")
                             }
                         }
@@ -557,12 +582,29 @@ object CastMediaManager {
                                     AppLogger.w(LogCategory.CAST, TAG, "Error during default route reset bounce: ${e.message}")
                                 }
 
+                                try {
+                                    castContext.sessionManager.endCurrentSession(true)
+                                } catch (_: Exception) {}
+
                                 mainHandler.postDelayed({
                                     if (!_isCastingFlow.value || isSessionConnected) return@postDelayed
                                     val freshCur = castContext.sessionManager.currentCastSession
                                     if (freshCur != null && (freshCur.isConnected || freshCur.isConnecting || freshCur.isResuming)) return@postDelayed
 
-                                    val freshTarget = findTargetRoute()
+                                    var freshTarget = findTargetRoute()
+                                    // If target is a Speaker Group and has stalled for >= 2 attempts, fall back to an active individual speaker so the alarm never fails silently
+                                    if (freshTarget != null && isGroupRoute(freshTarget) && reselectionAttempts >= 2) {
+                                        val individualFallback = validRoutes.firstOrNull { !isGroupRoute(it) && it.matchesSelector(selector) }
+                                        if (individualFallback != null) {
+                                            AppLogger.w(
+                                                LogCategory.CAST,
+                                                TAG,
+                                                "Speaker Group '${freshTarget.name}' connection stalled. Falling back to active speaker: ${individualFallback.name} (${individualFallback.id})"
+                                            )
+                                            freshTarget = individualFallback
+                                        }
+                                    }
+
                                     if (freshTarget != null) {
                                         val castDev = getCastDevice(freshTarget)
                                         AppLogger.i(
@@ -570,7 +612,7 @@ object CastMediaManager {
                                             TAG,
                                             "Re-selecting target route after bounce: ${freshTarget.name} (${freshTarget.id}) [hasCastDev=${castDev != null}]"
                                         )
-                                        triggerRouteSelection(mediaRouter, selector, freshTarget)
+                                        triggerRouteSelection(castContext, mediaRouter, selector, freshTarget)
                                     } else {
                                         AppLogger.w(LogCategory.CAST, TAG, "Target route not available during retry bounce, resetting selection flag")
                                         hasInitiatedSelection = false
@@ -776,6 +818,10 @@ object CastMediaManager {
 
         mainHandler.post {
             try {
+                if (!_isCastingFlow.value && !isSessionConnected && pendingMediaInfo == null) {
+                    releaseLocks()
+                    return@post
+                }
                 AppLogger.i(LogCategory.CAST, TAG, "stopCast called")
                 val castContext = try {
                     CastContext.getSharedInstance(context)

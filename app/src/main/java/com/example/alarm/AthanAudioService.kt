@@ -209,7 +209,14 @@ class AthanAudioService : Service() {
                         onError = { errMsg ->
                             AppLogger.w(LogCategory.ALARM, TAG, "Cast playback error reported: $errMsg")
                             isCastPlayingOrPending = false
-                            checkAllAudioCompletedAndStop()
+                            if (!isPhoneAudioEnabled && !isLocalAudioPlaying) {
+                                AppLogger.w(LogCategory.ALARM, TAG, "Triggering emergency phone audio chime because Cast failed and phone was silent")
+                                isLocalAudioPlaying = true
+                                requestAudioFocus()
+                                playLocalAudio("chime", AlarmMode.BEEP, prayerType)
+                            } else {
+                                checkAllAudioCompletedAndStop()
+                            }
                         }
                     )
 
