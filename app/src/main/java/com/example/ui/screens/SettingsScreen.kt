@@ -51,6 +51,18 @@ import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import com.example.ui.components.EasterEggDialog
 import com.example.ui.components.DebugLogsDialog
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -144,6 +156,9 @@ fun SettingsScreen(
     var showDebugLogsDialog by remember { mutableStateOf(false) }
     var tapCount by remember { mutableIntStateOf(0) }
     var lastTapTimestamp by remember { mutableLongStateOf(0L) }
+    var showEasterEggDialog by remember { mutableStateOf(false) }
+    var easterEggTapCount by remember { mutableIntStateOf(0) }
+    var lastEasterEggTapTimestamp by remember { mutableLongStateOf(0L) }
 
     LazyColumn(
         modifier = Modifier
@@ -554,66 +569,178 @@ fun SettingsScreen(
             }
         }
 
-        // Local Masjid Timetable Disclaimer Card
+        // Collapsible Local Masjid Timetable Disclaimer Card
         item {
+            var isMasjidTimetableExpanded by remember { mutableStateOf(false) }
+            val arrowRotation by animateFloatAsState(
+                targetValue = if (isMasjidTimetableExpanded) 180f else 0f,
+                label = "arrow_rotation"
+            )
+
             Card(
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isMasjidTimetableExpanded = !isMasjidTimetableExpanded }
             ) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = null,
-                        tint = GoldPrimary,
-                        modifier = Modifier
-                            .size(20.dp)
-                            .padding(top = 2.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "Check Local Masjid Timetable",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = GoldPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Check Local Masjid Timetable",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (isMasjidTimetableExpanded) "Collapse" else "Expand",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .rotate(arrowRotation)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Important Note: Calculated prayer times are theoretical astronomical models based on celestial algorithms. Actual prayer and Iqamah times depend on your local masjid / community consensus. Always check your local masjid timetable.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = 18.sp
-                        )
+                    }
+
+                    AnimatedVisibility(
+                        visible = isMasjidTimetableExpanded,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column(modifier = Modifier.padding(top = 10.dp)) {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            Text(
+                                text = "Important Note: Calculated prayer times are theoretical astronomical models based on celestial algorithms. Actual prayer and Iqamah times depend on your local masjid / community consensus. Always check your local masjid timetable.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                lineHeight = 18.sp
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // About Card
+        // About & Open Source Card (Click 7 times for Easter Egg)
         item {
             Card(
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Athan Alarm v${com.example.BuildConfig.VERSION_NAME}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                    // Clickable Version Row (Easter Egg Trigger)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                val now = System.currentTimeMillis()
+                                if (now - lastEasterEggTapTimestamp > 2500L) {
+                                    easterEggTapCount = 1
+                                } else {
+                                    easterEggTapCount++
+                                }
+                                lastEasterEggTapTimestamp = now
+                                if (easterEggTapCount >= 7) {
+                                    easterEggTapCount = 0
+                                    showEasterEggDialog = true
+                                } else if (easterEggTapCount >= 4) {
+                                    val remaining = 7 - easterEggTapCount
+                                    Toast.makeText(context, "$remaining taps to unlock surprise!", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = "Athan Alarm v${com.example.BuildConfig.VERSION_NAME}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "100% Free & Open Source • No Ads • No Tracking",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                        modifier = Modifier.padding(vertical = 12.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Keep us in your prayers and du'as.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+
+                    // Open Source GitHub Link
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/jmasalma/AthanAlarm2"))
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    Toast.makeText(context, "Could not open browser", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Code,
+                            contentDescription = "GitHub",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Source Code on GitHub",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "github.com/jmasalma/AthanAlarm2",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = "Open Link",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }
@@ -628,8 +755,15 @@ fun SettingsScreen(
                 SettingsClickableItem(
                     icon = Icons.Default.Security,
                     title = "Privacy Policy",
-                    subtitle = "100% on-device & offline. No data collected.",
-                    onClick = { showPrivacyDialog = true }
+                    subtitle = "masalma.com/AthanAlarmPrivacy.html",
+                    onClick = {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://masalma.com/AthanAlarmPrivacy.html"))
+                            context.startActivity(intent)
+                        } catch (_: Exception) {
+                            showPrivacyDialog = true
+                        }
+                    }
                 )
             }
             Spacer(modifier = Modifier.height(24.dp))
@@ -642,6 +776,9 @@ fun SettingsScreen(
     }
     if (showPrivacyDialog) {
         PrivacyPolicyDialog(onDismiss = { showPrivacyDialog = false })
+    }
+    if (showEasterEggDialog) {
+        EasterEggDialog(onDismiss = { showEasterEggDialog = false })
     }
     if (showCityDialog) {
         CitySelectionDialog(
@@ -1471,7 +1608,7 @@ fun PreAlertMinutesDialog(
 @Composable
 fun PrivacyPolicyDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val privacyUrl = "https://jmasalma.github.io/AthanAlarm2/privacy.html"
+    val privacyUrl = "https://masalma.com/AthanAlarmPrivacy.html"
 
     AlertDialog(
         onDismissRequest = onDismiss,
