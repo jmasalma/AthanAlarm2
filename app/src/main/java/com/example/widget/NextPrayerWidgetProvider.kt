@@ -7,10 +7,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
+import android.view.View
 import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
 import com.example.data.AppSettingsRepository
+import com.example.engine.FastingHelper
 import com.example.engine.PrayerCalculationEngine
 import com.example.model.PrayerType
 import kotlinx.coroutines.CoroutineScope
@@ -87,7 +89,26 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
                     }
 
                     val (type, time) = nextPair
-                    val englishName = if (type == PrayerType.NEXT_FAJR) "Fajr" else type.englishName
+                    val fasting = FastingHelper.calculateFastingStatus(
+                        settings = settings,
+                        todayFajr = result.fajr,
+                        todayMaghrib = result.maghrib,
+                        tomorrowFajr = tomorrowResult.fajr,
+                        now = now
+                    )
+
+                    val englishName = when {
+                        fasting != null && (type == PrayerType.FAJR || type == PrayerType.NEXT_FAJR) -> "Fajr • Imsak"
+                        fasting != null && type == PrayerType.MAGHRIB -> "Maghrib • Iftar"
+                        type == PrayerType.NEXT_FAJR -> "Fajr"
+                        else -> type.englishName
+                    }
+
+                    val countdownLabel = when {
+                        fasting != null && (type == PrayerType.FAJR || type == PrayerType.NEXT_FAJR) -> "IMSAK IN"
+                        fasting != null && type == PrayerType.MAGHRIB -> "IFTAR IN"
+                        else -> "STARTS IN"
+                    }
 
                     val formattedTime = if (settings.is24HourFormat) {
                         "%02d:%02d".format(time.first, time.second)
@@ -121,6 +142,15 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
                         val views = RemoteViews(context.packageName, R.layout.widget_next_prayer).apply {
                             setTextViewText(R.id.widget_prayer_name, englishName)
                             setTextViewText(R.id.widget_prayer_time, formattedTime)
+                            setTextViewText(R.id.widget_countdown_label, countdownLabel)
+
+                            if (fasting != null) {
+                                setViewVisibility(R.id.widget_fasting_info, View.VISIBLE)
+                                val icon = if (fasting.isIftar) "🌙" else "✨"
+                                setTextViewText(R.id.widget_fasting_info, "$icon ${fasting.milestoneName} in ${fasting.shortCountdownFormatted}")
+                            } else {
+                                setViewVisibility(R.id.widget_fasting_info, View.GONE)
+                            }
 
                             // Live countdown chronometer
                             setChronometerCountDown(R.id.widget_countdown_chronometer, true)

@@ -8,6 +8,9 @@ import com.example.alarm.AthanAlarmScheduler
 import com.example.alarm.AthanAudioService
 import com.example.data.AppSettings
 import com.example.data.AppSettingsRepository
+import com.example.data.RamadanMode
+import com.example.engine.FastingHelper
+import com.example.engine.FastingStatus
 import com.example.engine.HijriCalendarHelper
 import com.example.engine.HijriDate
 import com.example.engine.PrayerCalculationEngine
@@ -20,6 +23,8 @@ import com.example.model.JuristicMethod
 import com.example.model.PrayerTimeItem
 import com.example.model.PrayerType
 import com.example.util.LocationHelper
+import com.example.widget.NextPrayerWidgetProvider
+import com.example.widget.PrayerScheduleWidgetProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +40,7 @@ data class AthanUiState(
     val nextPrayer: PrayerTimeItem? = null,
     val countdownFormatted: String = "--:--:--",
     val countdownProgress: Float = 0f,
+    val fastingStatus: FastingStatus? = null,
     val hijriDate: HijriDate = HijriCalendarHelper.getTodayHijri(),
     val qiblaAngle: Double = 0.0,
     val distanceToKaabaKm: Double = 0.0,
@@ -51,6 +57,9 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
 
     private var countdownJob: Job? = null
     private var lastCalculatedDay: Int = -1
+    private var cachedTodayFajr: Pair<Int, Int>? = null
+    private var cachedTodayMaghrib: Pair<Int, Int>? = null
+    private var cachedTomorrowFajr: Pair<Int, Int>? = null
 
     init {
         viewModelScope.launch {
@@ -143,10 +152,23 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
         val distKm = QiblaHelper.calculateDistanceToKaaba(settings.city.latitude, settings.city.longitude)
         val hijri = HijriCalendarHelper.getTodayHijri(settings.hijriDayOffset)
 
+        cachedTodayFajr = result.fajr
+        cachedTodayMaghrib = result.maghrib
+        cachedTomorrowFajr = tomorrowResult.fajr
+
+        val fasting = FastingHelper.calculateFastingStatus(
+            settings = settings,
+            todayFajr = result.fajr,
+            todayMaghrib = result.maghrib,
+            tomorrowFajr = tomorrowResult.fajr,
+            now = now
+        )
+
         _uiState.value = _uiState.value.copy(
             settings = settings,
             prayerTimes = prayerItems,
             nextPrayer = nextItem,
+            fastingStatus = fasting,
             hijriDate = hijri,
             qiblaAngle = qibla,
             distanceToKaabaKm = distKm
@@ -204,9 +226,20 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
         val intervalEstimateSec = 4 * 3600
         val progress = (1.0f - (diffSec.toFloat() / intervalEstimateSec.toFloat())).coerceIn(0f, 1f)
 
+        val fasting = if (cachedTodayFajr != null && cachedTodayMaghrib != null && cachedTomorrowFajr != null) {
+            FastingHelper.calculateFastingStatus(
+                settings = state.settings,
+                todayFajr = cachedTodayFajr!!,
+                todayMaghrib = cachedTodayMaghrib!!,
+                tomorrowFajr = cachedTomorrowFajr!!,
+                now = now
+            )
+        } else null
+
         _uiState.value = _uiState.value.copy(
             countdownFormatted = formatted,
-            countdownProgress = progress
+            countdownProgress = progress,
+            fastingStatus = fasting
         )
     }
 
@@ -311,6 +344,15 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
     fun updateHijriOffset(offset: Int) {
         viewModelScope.launch {
             repository.updateHijriOffset(offset)
+        }
+    }
+
+    fun updateRamadanMode(context: Context, mode: RamadanMode) {
+        viewModelScope.launch {
+            repository.updateRamadanMode(mode)
+            recalculatePrayers(_uiState.value.settings.copy(ramadanMode = mode))
+            NextPrayerWidgetProvider.updateAllWidgets(context)
+            PrayerScheduleWidgetProvider.updateAllWidgets(context)
         }
     }
 

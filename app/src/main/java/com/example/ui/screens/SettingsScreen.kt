@@ -53,7 +53,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import com.example.data.RamadanMode
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
@@ -147,6 +149,7 @@ fun SettingsScreen(
     var showHighLatDialog by remember { mutableStateOf(false) }
     var showSoundDialog by remember { mutableStateOf(false) }
     var showHijriOffsetDialog by remember { mutableStateOf(false) }
+    var showRamadanModeDialog by remember { mutableStateOf(false) }
     var showBatteryGuide by remember { mutableStateOf(false) }
     var showPreAlertMinutesDialog by remember { mutableStateOf(false) }
     var showPreAlertSoundDialog by remember { mutableStateOf(false) }
@@ -565,6 +568,19 @@ fun SettingsScreen(
                         subtitle = if (uiState.settings.hijriDayOffset == 0) "Standard (0 days)" else "%+d days".format(uiState.settings.hijriDayOffset),
                         onClick = { showHijriOffsetDialog = true }
                     )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+                    SettingsClickableItem(
+                        icon = Icons.Default.NightlightRound,
+                        title = "Ramadan & Fasting Mode",
+                        subtitle = when (uiState.settings.ramadanMode) {
+                            RamadanMode.OFF -> "Disabled"
+                            RamadanMode.AUTO -> "Auto (Ramadan Only)"
+                            RamadanMode.FASTING_DAYS -> "Fasting Days (Voluntary Fasts)"
+                        },
+                        onClick = { showRamadanModeDialog = true }
+                    )
                 }
             }
         }
@@ -841,6 +857,17 @@ fun SettingsScreen(
                 showHijriOffsetDialog = false
             },
             onDismiss = { showHijriOffsetDialog = false }
+        )
+    }
+
+    if (showRamadanModeDialog) {
+        RamadanModeDialog(
+            currentMode = uiState.settings.ramadanMode,
+            onSelect = {
+                viewModel.updateRamadanMode(context, it)
+                showRamadanModeDialog = false
+            },
+            onDismiss = { showRamadanModeDialog = false }
         )
     }
 
@@ -1549,6 +1576,76 @@ fun HijriOffsetDialog(
                             text = if (offset == 0) "Standard (0 days)" else "%+d days".format(offset),
                             fontWeight = if (offset == currentOffset) FontWeight.Bold else FontWeight.Normal
                         )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun RamadanModeDialog(
+    currentMode: RamadanMode,
+    onSelect: (RamadanMode) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val options = listOf(
+        Triple(
+            RamadanMode.OFF,
+            "Disabled",
+            "Fasting countdown is turned off."
+        ),
+        Triple(
+            RamadanMode.AUTO,
+            "Auto (Ramadan Only)",
+            "Automatically activates during the holy month of Ramadan (month 9) using the Hijri calendar."
+        ),
+        Triple(
+            RamadanMode.FASTING_DAYS,
+            "Fasting Days",
+            "Always active for voluntary fasting days (e.g. Mondays/Thursdays, White Days, Shawwal, Arafah)."
+        )
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Ramadan & Fasting Mode") },
+        text = {
+            Column {
+                Text(
+                    text = "Shows an extra countdown to Imsak (Fajr) and Iftar (Maghrib) inside the main prayer card and widgets.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                options.forEach { (mode, label, description) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(mode) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = mode == currentMode,
+                            onClick = { onSelect(mode) }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (mode == currentMode) FontWeight.Bold else FontWeight.SemiBold
+                            )
+                            Text(
+                                text = description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

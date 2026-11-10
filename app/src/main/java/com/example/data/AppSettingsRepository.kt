@@ -20,6 +20,12 @@ import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "athan_settings")
 
+enum class RamadanMode {
+    OFF,
+    AUTO,
+    FASTING_DAYS
+}
+
 data class AppSettings(
     val city: City = City.DEFAULT,
     val calculationMethod: CalculationMethod = CalculationMethod.ISNA,
@@ -47,6 +53,7 @@ data class AppSettings(
     val prePrayerReminderMinutes: Int = 20,
     val prePrayerReminderSound: String = "chime", // "chime", "system_notification", "system_alarm", "silent", or ringtone/MP3 URI
     val hijriDayOffset: Int = 0,
+    val ramadanMode: RamadanMode = RamadanMode.OFF,
     val castEnabled: Boolean = false,
     val castDeviceId: String? = null,
     val castDeviceName: String? = null,
@@ -72,6 +79,7 @@ class AppSettingsRepository(private val context: Context) {
         val PRE_REMINDER_MINUTES = intPreferencesKey("pre_reminder_minutes")
         val PRE_REMINDER_SOUND = stringPreferencesKey("pre_reminder_sound")
         val HIJRI_DAY_OFFSET = intPreferencesKey("hijri_day_offset")
+        val RAMADAN_MODE = stringPreferencesKey("ramadan_mode")
         val CAST_ENABLED = booleanPreferencesKey("cast_enabled")
         val CAST_DEVICE_ID = stringPreferencesKey("cast_device_id")
         val CAST_DEVICE_NAME = stringPreferencesKey("cast_device_name")
@@ -112,6 +120,8 @@ class AppSettingsRepository(private val context: Context) {
         val preMinutes = pref[PreferencesKeys.PRE_REMINDER_MINUTES] ?: 20
         val preSound = pref[PreferencesKeys.PRE_REMINDER_SOUND] ?: "chime"
         val hijriOffset = pref[PreferencesKeys.HIJRI_DAY_OFFSET] ?: 0
+        val ramadanModeStr = pref[PreferencesKeys.RAMADAN_MODE]
+        val ramadanMode = RamadanMode.entries.firstOrNull { it.name == ramadanModeStr } ?: RamadanMode.OFF
 
         val alarmModes = PrayerType.entries.associateWith { type ->
             val modeStr = pref[PreferencesKeys.alarmKey(type)]
@@ -148,6 +158,7 @@ class AppSettingsRepository(private val context: Context) {
             prePrayerReminderMinutes = preMinutes,
             prePrayerReminderSound = preSound,
             hijriDayOffset = hijriOffset,
+            ramadanMode = ramadanMode,
             castEnabled = castEnabled,
             castDeviceId = castDeviceId,
             castDeviceName = castDeviceName,
@@ -210,6 +221,10 @@ class AppSettingsRepository(private val context: Context) {
 
     suspend fun updateHijriOffset(offset: Int) {
         context.dataStore.edit { it[PreferencesKeys.HIJRI_DAY_OFFSET] = offset }
+    }
+
+    suspend fun updateRamadanMode(mode: RamadanMode) {
+        context.dataStore.edit { it[PreferencesKeys.RAMADAN_MODE] = mode.name }
     }
 
     suspend fun updateCastEnabled(enabled: Boolean) {

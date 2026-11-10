@@ -12,6 +12,7 @@ import android.widget.RemoteViews
 import com.example.MainActivity
 import com.example.R
 import com.example.data.AppSettingsRepository
+import com.example.engine.FastingHelper
 import com.example.engine.PrayerCalculationEngine
 import com.example.model.PrayerType
 import kotlinx.coroutines.CoroutineScope
@@ -108,6 +109,7 @@ class PrayerScheduleWidgetProvider : AppWidgetProvider() {
                         }
                     }
                     val isTomorrowFajr = (nextType == null)
+                    val fastingActive = FastingHelper.isFastingActive(settings, now)
 
                     for (widgetId in appWidgetIds) {
                         val views = RemoteViews(context.packageName, R.layout.widget_prayer_schedule).apply {
@@ -117,6 +119,14 @@ class PrayerScheduleWidgetProvider : AppWidgetProvider() {
                             for (row in rows) {
                                 val m = row.time.first * 60 + row.time.second
                                 setTextViewText(row.timeId, format(row.time))
+
+                                val rowName = when {
+                                    fastingActive && row.type == PrayerType.FAJR -> "Fajr (Imsak)"
+                                    fastingActive && row.type == PrayerType.MAGHRIB -> "Maghrib (Iftar)"
+                                    else -> row.type.englishName
+                                }
+                                setTextViewText(row.nameId, rowName)
+
                                 val isNext = (row.type == nextType && !isTomorrowFajr)
                                 val isPassed = if (isTomorrowFajr) true else (m <= currentMinutes)
 
@@ -136,6 +146,8 @@ class PrayerScheduleWidgetProvider : AppWidgetProvider() {
                             }
 
                             // Next Fajr (tomorrow)
+                            val nextFajrName = if (fastingActive) "Next Fajr (Imsak)" else "Next Fajr"
+                            setTextViewText(R.id.name_next_fajr, nextFajrName)
                             setTextViewText(R.id.time_next_fajr, format(tomorrowResult.fajr))
                             if (isTomorrowFajr) {
                                 setViewVisibility(R.id.indicator_next_fajr, View.VISIBLE)

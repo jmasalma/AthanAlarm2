@@ -40,6 +40,18 @@
             android:textStyle="bold"
             android:layout_marginTop="1dp"
             android:maxLines="1" />
+
+        <TextView
+            android:id="@+id/widget_fasting_info"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🌙 Iftar in 3h 15m"
+            android:textColor="#D4AF37"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:visibility="gone"
+            android:layout_marginTop="2dp"
+            android:maxLines="1" />
     </LinearLayout>
 
     <!-- Right side: Countdown -->
