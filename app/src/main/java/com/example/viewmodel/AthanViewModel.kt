@@ -442,11 +442,26 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
         }
     }
 
+    private var testCastObserverJob: Job? = null
+
     fun testCastPlayback(context: Context) {
+        testCastObserverJob?.cancel()
         _uiState.value = _uiState.value.copy(isTestingCast = true)
         val castSound = _uiState.value.settings.castAlertSound
         val targetDeviceId = _uiState.value.settings.castDeviceId
         val targetDeviceName = _uiState.value.settings.castDeviceName
+
+        testCastObserverJob = viewModelScope.launch {
+            var hasSeenActive = false
+            com.example.cast.CastMediaManager.isCastingFlow.collect { isCasting ->
+                if (isCasting) {
+                    hasSeenActive = true
+                } else if (hasSeenActive) {
+                    _uiState.value = _uiState.value.copy(isTestingCast = false)
+                    testCastObserverJob?.cancel()
+                }
+            }
+        }
 
         // Only test on Google/Chromecast (no local phone playback during this test)
         com.example.cast.CastMediaManager.playOnCast(
@@ -459,6 +474,7 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
                 _uiState.value = _uiState.value.copy(isTestingCast = true)
             },
             onError = { errorMsg ->
+                testCastObserverJob?.cancel()
                 _uiState.value = _uiState.value.copy(isTestingCast = false)
                 android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_LONG).show()
             }
@@ -466,6 +482,7 @@ class AthanViewModel(private val repository: AppSettingsRepository) : ViewModel(
     }
 
     fun stopTestCastPlayback(context: Context) {
+        testCastObserverJob?.cancel()
         _uiState.value = _uiState.value.copy(isTestingCast = false)
         com.example.cast.CastMediaManager.stopCast(context)
     }

@@ -19,6 +19,8 @@ class CastOptionsProvider : OptionsProvider {
             .setLaunchOptions(launchOptions)
             .setStopReceiverApplicationWhenEndingSession(true)
             .setResumeSavedSession(false)
+            .setEnableReconnectionService(false)
+            .setSessionTransferEnabled(false)
             .build()
     }
 
