@@ -1,7 +1,12 @@
 package com.example.cast
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -40,6 +45,9 @@ object CastMediaManager {
     private const val TAG = "CastMediaManager"
     private const val OVERALL_TIMEOUT_MS = 28000L
     private const val ATTEMPT_TIMEOUT_MS = 8500L
+    internal const val WIFI_WAIT_FAIL_FAST_MS = 7500L
+    private const val SUSPENSION_TIMEOUT_MS = 12000L
+    private const val MAX_STREAMING_DURATION_MS = 7 * 60 * 1000L
     private const val MAX_RETRY_ATTEMPTS = 3
 
     private val localHttpServer = LocalHttpAudioServer()
@@ -68,11 +76,16 @@ object CastMediaManager {
 
     private var activeDiscoveryCallback: MediaRouter.Callback? = null
     private var activeScanCallback: MediaRouter.Callback? = null
+    private var activeNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var activeConnectivityManager: ConnectivityManager? = null
     private var overallTimeoutRunnable: Runnable? = null
     private var attemptTimeoutRunnable: Runnable? = null
     private var activePollRunnable: Runnable? = null
     private var pendingSelectionRunnable: Runnable? = null
     private var pendingRetryRunnable: Runnable? = null
+    private var wifiWaitFailFastRunnable: Runnable? = null
+    private var suspensionTimeoutRunnable: Runnable? = null
+    private var maxStreamingDurationRunnable: Runnable? = null
 
     @Volatile
     private var hasInitiatedConnection = false
@@ -154,6 +167,25 @@ object CastMediaManager {
             idleReason != MediaStatus.IDLE_REASON_NONE
     }
 
+    internal fun shouldFailFastNoWifi(
+        wifiEnabled: Boolean,
+        hasWifiTransport: Boolean,
+        validRouteCount: Int,
+        elapsedMs: Long
+    ): Boolean {
+        if (validRouteCount > 0) return false
+        if (!wifiEnabled) return true
+        return !hasWifiTransport && elapsedMs >= WIFI_WAIT_FAIL_FAST_MS
+    }
+
+    internal fun shouldAdjustVolume(
+        hasVerifiedVolume: Boolean,
+        volume: Double,
+        isMuted: Boolean
+    ): Boolean {
+        return !hasVerifiedVolume && (isMuted || volume < 0.15)
+    }
+
     private fun acquireLocks(context: Context) {
         try {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -168,7 +200,12 @@ object CastMediaManager {
             }
 
             if (wifiLock == null) {
-                wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "CastMediaManager::WifiLock")?.apply {
+                val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wifiManager?.createWifiLock(lockMode, "CastMediaManager::WifiLock")?.apply {
                     setReferenceCounted(false)
                 }
             }
@@ -304,8 +341,8 @@ object CastMediaManager {
         )
 
         val resolved = AudioStreamResolver.resolveAudioData(context, soundChoice, prayerType)
-        val streamUrl = localHttpServer.startWithBytes(resolved.bytes, resolved.mimeType, context)
-        AppLogger.i(LogCategory.CAST, TAG, "Local HTTP audio stream URL ready: $streamUrl (${resolved.bytes.size} bytes)")
+        var currentStreamUrl = localHttpServer.startWithBytes(resolved.bytes, resolved.mimeType, context)
+        AppLogger.i(LogCategory.CAST, TAG, "Local HTTP audio stream URL ready: $currentStreamUrl (${resolved.bytes.size} bytes)")
 
         val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
             putString(MediaMetadata.KEY_TITLE, resolved.title)
@@ -313,11 +350,22 @@ object CastMediaManager {
             putString(MediaMetadata.KEY_SUBTITLE, "Notification")
         }
 
-        val mediaInfo = MediaInfo.Builder(streamUrl)
-            .setContentType(resolved.mimeType)
-            .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
-            .setMetadata(metadata)
-            .build()
+        fun buildMediaInfo(url: String): MediaInfo {
+            return MediaInfo.Builder(url)
+                .setContentType(resolved.mimeType)
+                .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                .setMetadata(metadata)
+                .build()
+        }
+
+        var currentMediaInfo = buildMediaInfo(currentStreamUrl)
+        var errorDelivered = false
+        fun deliverError(message: String) {
+            if (!errorDelivered) {
+                errorDelivered = true
+                onError?.invoke(message)
+            }
+        }
 
         mainHandler.post {
             if (generation != castGeneration || !isCastInProgress) return@post
@@ -328,10 +376,6 @@ object CastMediaManager {
 
                 val targetIds = targetDeviceId?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
                 val targetNames = targetDeviceName?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
-
-                // Remove old scan callbacks before starting a fresh active scan
-                removeDiscoveryCallbacks(appContext)
-                startDiscovery(appContext)
 
                 fun getCastDevice(route: MediaRouter.RouteInfo): CastDevice? {
                     return try {
@@ -362,13 +406,31 @@ object CastMediaManager {
 
                 val initialRoutes = mediaRouter.routes
                 val nonDefaultInitial = initialRoutes.filter { !it.isDefault }
+                val validInitialCount = toCandidates(initialRoutes).count {
+                    isValidCastRouteId(it.id, it.isDefault) && it.hasCastDevice
+                }
+                val wifiEnabled = LocalHttpAudioServer.isWifiEnabled(appContext)
+                val hasWifiTransport = LocalHttpAudioServer.hasWifiTransport(appContext)
+
                 AppLogger.i(
                     LogCategory.CAST,
                     TAG,
-                    "MediaRouter initial cache: total=${initialRoutes.size}, nonDefault=${nonDefaultInitial.size}: ${
+                    "MediaRouter initial cache: total=${initialRoutes.size}, nonDefault=${nonDefaultInitial.size}, wifiEnabled=$wifiEnabled, hasWifiTransport=$hasWifiTransport: ${
                         nonDefaultInitial.map { "${it.name}(${it.id}, hasCastDev=${getCastDevice(it) != null})" }
                     }"
                 )
+
+                if (shouldFailFastNoWifi(wifiEnabled, hasWifiTransport, validInitialCount, elapsedMs = 0L)) {
+                    val label = targetDeviceName ?: "Google Cast speaker"
+                    AppLogger.w(LogCategory.CAST, TAG, "Wi-Fi is turned off and no Cast routes are available; failing fast for phone fallback.")
+                    stopCast(appContext)
+                    deliverError("Wi-Fi is turned off; cannot cast to $label.")
+                    return@post
+                }
+
+                // Remove old scan callbacks before starting a fresh active scan
+                removeDiscoveryCallbacks(appContext)
+                startDiscovery(appContext)
 
                 val attemptedRouteIds = linkedSetOf<String>()
                 var isRetrying = false
@@ -385,7 +447,7 @@ object CastMediaManager {
                         val label = targetDeviceName ?: "Google Cast speaker"
                         AppLogger.w(LogCategory.CAST, TAG, "Cast playback timed out (${OVERALL_TIMEOUT_MS}ms) for: $label")
                         stopCast(appContext)
-                        onError?.invoke("Could not connect to $label. Please check that it is powered on and on the same Wi-Fi.")
+                        deliverError("Could not connect to $label. Please check that it is powered on and on the same Wi-Fi.")
                     }
                     overallTimeoutRunnable = watchdog
                     mainHandler.postDelayed(watchdog, OVERALL_TIMEOUT_MS)
@@ -397,6 +459,8 @@ object CastMediaManager {
                     if (generation != castGeneration || !isCastInProgress || isSessionConnected || isRetrying) return
                     attemptTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
                     attemptTimeoutRunnable = null
+                    suspensionTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+                    suspensionTimeoutRunnable = null
                     disconnectActiveClient(stopRemoteMedia = false)
 
                     if (retryAttempts < MAX_RETRY_ATTEMPTS) {
@@ -439,7 +503,7 @@ object CastMediaManager {
                             } else {
                                 AppLogger.e(LogCategory.CAST, TAG, "No Cast route available for retry #$retryAttempts")
                                 stopCast(appContext)
-                                onError?.invoke("Could not connect to ${targetDeviceName ?: "Google Home speaker"} ($reason).")
+                                deliverError("Could not connect to ${targetDeviceName ?: "Google Home speaker"} ($reason).")
                             }
                         }
                         pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -448,13 +512,15 @@ object CastMediaManager {
                     } else {
                         AppLogger.e(LogCategory.CAST, TAG, "All $retryAttempts Cast connection attempts failed ($reason).")
                         stopCast(appContext)
-                        onError?.invoke("Could not connect to ${targetDeviceName ?: "Google Home speaker"} after $retryAttempts attempts ($reason).")
+                        deliverError("Could not connect to ${targetDeviceName ?: "Google Home speaker"} after $retryAttempts attempts ($reason).")
                     }
                 }
 
                 connectToRoute = { route, source ->
                     if (generation == castGeneration && isCastInProgress && !isSessionConnected) {
                         cancelPendingSelection()
+                        wifiWaitFailFastRunnable?.let { mainHandler.removeCallbacks(it) }
+                        wifiWaitFailFastRunnable = null
                         hasInitiatedConnection = true
                         val castDevice = getCastDevice(route)
                         if (castDevice == null) {
@@ -485,6 +551,8 @@ object CastMediaManager {
 
                             var hasConnectedForAttempt = false
                             var hasMediaLoadedForAttempt = false
+                            var hasVerifiedVolume = false
+                            var clientRef: GoogleApiClient? = null
 
                             val castListener = object : Cast.Listener() {
                                 override fun onApplicationDisconnected(statusCode: Int) {
@@ -499,14 +567,51 @@ object CastMediaManager {
                                         handleAttemptFailure("Application disconnected (status=$statusCode)", route.id)
                                     }
                                 }
+
+                                override fun onVolumeChanged() {
+                                    val client = clientRef ?: return
+                                    if (generation != castGeneration || attemptId != activeAttemptId || !isCastInProgress) return
+                                    if (hasVerifiedVolume || !client.isConnected) return
+                                    hasVerifiedVolume = true
+                                    try {
+                                        val currentVol = castApi.getVolume(client)
+                                        val muted = castApi.isMute(client)
+                                        if (shouldAdjustVolume(hasVerifiedVolume = false, volume = currentVol, isMuted = muted)) {
+                                            if (muted) {
+                                                castApi.setMute(client, false)
+                                                AppLogger.i(LogCategory.CAST, TAG, "Unmuted Cast device after status sync")
+                                            }
+                                            if (currentVol < 0.15) {
+                                                castApi.setVolume(client, 0.5)
+                                                AppLogger.i(LogCategory.CAST, TAG, "Adjusted Cast volume from ${(currentVol * 100).toInt()}% to 50% (real status)")
+                                            }
+                                        } else {
+                                            AppLogger.i(LogCategory.CAST, TAG, "Preserving Cast speaker volume: ${(currentVol * 100).toInt()}% (muted=$muted)")
+                                        }
+                                    } catch (e: Exception) {
+                                        AppLogger.w(LogCategory.CAST, TAG, "Non-fatal volume adjustment check failed: ${e.message}")
+                                    }
+                                }
                             }
 
-                            var clientRef: GoogleApiClient? = null
                             val connectionCallbacks = object : GoogleApiClient.ConnectionCallbacks {
                                 override fun onConnected(connectionHint: Bundle?) {
                                     val client = clientRef ?: return
                                     if (generation != castGeneration || attemptId != activeAttemptId || !isCastInProgress) return
-                                    if (hasConnectedForAttempt) return
+
+                                    // Cancel any pending suspension teardown if Play Services auto-reconnected
+                                    suspensionTimeoutRunnable?.let {
+                                        mainHandler.removeCallbacks(it)
+                                        suspensionTimeoutRunnable = null
+                                    }
+
+                                    if (hasConnectedForAttempt) {
+                                        AppLogger.i(LogCategory.CAST, TAG, "GoogleApiClient reconnected after suspension to ${castDevice.friendlyName}")
+                                        try {
+                                            castApi.requestStatus(client)
+                                        } catch (_: Exception) {}
+                                        return
+                                    }
                                     hasConnectedForAttempt = true
 
                                     AppLogger.i(
@@ -520,20 +625,11 @@ object CastMediaManager {
                                         return
                                     }
 
-                                    // Adjust speaker volume safely so muted/quiet speakers are audible
+                                    // Request actual device status so Cast.Listener.onVolumeChanged inspects real speaker volume
+                                    // instead of reading Play Services' pre-status 0.0 default.
                                     try {
-                                        val currentVol = castApi.getVolume(client)
-                                        if (currentVol < 0.15) {
-                                            castApi.setVolume(client, 0.5)
-                                            AppLogger.i(LogCategory.CAST, TAG, "Adjusted Cast volume from ${(currentVol * 100).toInt()}% to 50%")
-                                        }
-                                        if (castApi.isMute(client)) {
-                                            castApi.setMute(client, false)
-                                            AppLogger.i(LogCategory.CAST, TAG, "Unmuted Cast device before playback")
-                                        }
-                                    } catch (e: Exception) {
-                                        AppLogger.w(LogCategory.CAST, TAG, "Non-fatal volume adjustment check failed: ${e.message}")
-                                    }
+                                        castApi.requestStatus(client)
+                                    } catch (_: Exception) {}
 
                                     val launchOptions = LaunchOptions.Builder()
                                         .setRelaunchIfRunning(true)
@@ -602,20 +698,13 @@ object CastMediaManager {
                                                 return@setResultCallback
                                             }
 
-                                            val targetMediaInfo = if (mediaInfo.contentId?.contains("127.0.0.1") == true) {
-                                                val freshUrl = localHttpServer.getStreamUrl(appContext)
-                                                if (!freshUrl.contains("127.0.0.1")) {
-                                                    AppLogger.i(LogCategory.CAST, TAG, "Refreshing loopback URL to Wi-Fi IP: $freshUrl")
-                                                    MediaInfo.Builder(freshUrl)
-                                                        .setContentType(mediaInfo.contentType ?: "audio/mpeg")
-                                                        .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
-                                                        .setMetadata(mediaInfo.metadata)
-                                                        .build()
-                                                } else {
-                                                    mediaInfo
-                                                }
+                                            val freshUrl = localHttpServer.getStreamUrl(appContext)
+                                            val targetMediaInfo = if (!freshUrl.contains("127.0.0.1") && freshUrl != currentMediaInfo.contentId) {
+                                                AppLogger.i(LogCategory.CAST, TAG, "Refreshing stream URL to Wi-Fi IP: $freshUrl")
+                                                currentStreamUrl = freshUrl
+                                                buildMediaInfo(freshUrl).also { currentMediaInfo = it }
                                             } else {
-                                                mediaInfo
+                                                currentMediaInfo
                                             }
 
                                             AppLogger.i(LogCategory.CAST, TAG, "Loading MediaInfo into RemoteMediaPlayer (${targetMediaInfo.contentId})...")
@@ -635,6 +724,23 @@ object CastMediaManager {
                                                         activePollRunnable?.let { mainHandler.removeCallbacks(it) }
                                                         activePollRunnable = null
                                                         removeDiscoveryCallbacks(appContext)
+                                                        unregisterNetworkCallback()
+
+                                                        // Safety ceiling in case connection silently drops without an IDLE status update
+                                                        maxStreamingDurationRunnable?.let { mainHandler.removeCallbacks(it) }
+                                                        val maxDurationGuard = Runnable {
+                                                            if (generation == castGeneration && attemptId == activeAttemptId && isCastInProgress) {
+                                                                AppLogger.w(
+                                                                    LogCategory.CAST,
+                                                                    TAG,
+                                                                    "Max Cast streaming duration (${MAX_STREAMING_DURATION_MS}ms) reached; stopping cast cleanly."
+                                                                )
+                                                                stopCast(appContext)
+                                                            }
+                                                        }
+                                                        maxStreamingDurationRunnable = maxDurationGuard
+                                                        mainHandler.postDelayed(maxDurationGuard, MAX_STREAMING_DURATION_MS)
+
                                                         onStarted?.invoke()
                                                     } else {
                                                         handleAttemptFailure(
@@ -653,8 +759,28 @@ object CastMediaManager {
                                 }
 
                                 override fun onConnectionSuspended(cause: Int) {
-                                    if (generation != castGeneration || attemptId != activeAttemptId) return
-                                    AppLogger.w(LogCategory.CAST, TAG, "GoogleApiClient connection suspended (cause=$cause)")
+                                    if (generation != castGeneration || attemptId != activeAttemptId || !isCastInProgress) return
+                                    AppLogger.w(
+                                        LogCategory.CAST,
+                                        TAG,
+                                        "GoogleApiClient connection suspended (cause=$cause, connected=$isSessionConnected)"
+                                    )
+                                    suspensionTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+                                    val timeout = Runnable {
+                                        if (generation != castGeneration || attemptId != activeAttemptId || !isCastInProgress) return@Runnable
+                                        if (isSessionConnected) {
+                                            AppLogger.w(
+                                                LogCategory.CAST,
+                                                TAG,
+                                                "Cast connection remained suspended for ${SUSPENSION_TIMEOUT_MS}ms during playback; stopping cast cleanly to prevent server/service leak."
+                                            )
+                                            stopCast(appContext)
+                                        } else {
+                                            handleAttemptFailure("GoogleApiClient connection suspended (cause=$cause)", route.id)
+                                        }
+                                    }
+                                    suspensionTimeoutRunnable = timeout
+                                    mainHandler.postDelayed(timeout, SUSPENSION_TIMEOUT_MS)
                                 }
                             }
 
@@ -753,6 +879,58 @@ object CastMediaManager {
 
                 startOverallWatchdog()
 
+                if (!hasWifiTransport && validInitialCount == 0) {
+                    val wifiFailFast = Runnable {
+                        if (generation != castGeneration || isSessionConnected || !isCastInProgress || hasInitiatedConnection) {
+                            return@Runnable
+                        }
+                        val currentValidCount = toCandidates(mediaRouter.routes).count {
+                            isValidCastRouteId(it.id, it.isDefault) && it.hasCastDevice
+                        }
+                        val currentWifiEnabled = LocalHttpAudioServer.isWifiEnabled(appContext)
+                        val currentHasWifi = LocalHttpAudioServer.hasWifiTransport(appContext)
+                        if (shouldFailFastNoWifi(currentWifiEnabled, currentHasWifi, currentValidCount, WIFI_WAIT_FAIL_FAST_MS)) {
+                            val label = targetDeviceName ?: "Google Cast speaker"
+                            AppLogger.w(
+                                LogCategory.CAST,
+                                TAG,
+                                "No Wi-Fi transport (wifiEnabled=$currentWifiEnabled) and 0 Cast routes after ${WIFI_WAIT_FAIL_FAST_MS}ms; failing fast for phone fallback."
+                            )
+                            stopCast(appContext)
+                            deliverError("Phone is not connected to Wi-Fi; cannot reach $label.")
+                        }
+                    }
+                    wifiWaitFailFastRunnable = wifiFailFast
+                    mainHandler.postDelayed(wifiFailFast, WIFI_WAIT_FAIL_FAST_MS)
+                }
+
+                if (!hasWifiTransport || currentStreamUrl.contains("127.0.0.1")) {
+                    registerWifiRecoveryCallback(appContext) {
+                        if (generation != castGeneration || !isCastInProgress || isSessionConnected) return@registerWifiRecoveryCallback
+                        val freshUrl = localHttpServer.getStreamUrl(appContext)
+                        if (!freshUrl.contains("127.0.0.1") && freshUrl != currentStreamUrl) {
+                            currentStreamUrl = freshUrl
+                            currentMediaInfo = buildMediaInfo(freshUrl)
+                            AppLogger.i(LogCategory.CAST, TAG, "Wi-Fi interface active; updated stream URL to $freshUrl")
+                        }
+                        if (!hasInitiatedConnection && !isRetrying) {
+                            AppLogger.i(LogCategory.CAST, TAG, "Refreshing MediaRouter active scan after Wi-Fi recovery")
+                            mediaRouter.removeCallback(scanListener)
+                            mediaRouter.addCallback(
+                                selector,
+                                scanListener,
+                                MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN or
+                                    MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY or
+                                    MediaRouter.CALLBACK_FLAG_UNFILTERED_EVENTS
+                            )
+                            val recoveredMatch = findMatchingRoute()
+                            if (recoveredMatch != null) {
+                                scheduleConnection(recoveredMatch, "wifiRecovery", 250L)
+                            }
+                        }
+                    }
+                }
+
                 val initialTarget = findMatchingRoute()
                 if (initialTarget != null) {
                     val isGroup = isGroupRouteInfo(initialTarget.name, initialTarget.description)
@@ -825,8 +1003,45 @@ object CastMediaManager {
             } catch (e: Exception) {
                 AppLogger.e(LogCategory.CAST, TAG, "Exception in playOnCast: ${e.message}", e)
                 stopCast(context)
-                onError?.invoke(e.message ?: "Failed to initiate casting")
+                deliverError(e.message ?: "Failed to initiate casting")
             }
+        }
+    }
+
+    private fun registerWifiRecoveryCallback(context: Context, onWifiReady: () -> Unit) {
+        unregisterNetworkCallback()
+        try {
+            val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .build()
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    mainHandler.post { onWifiReady() }
+                }
+
+                override fun onLinkPropertiesChanged(network: Network, linkProperties: android.net.LinkProperties) {
+                    mainHandler.post { onWifiReady() }
+                }
+            }
+            activeConnectivityManager = cm
+            activeNetworkCallback = callback
+            cm.registerNetworkCallback(request, callback)
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.CAST, TAG, "Failed to register Wi-Fi NetworkCallback: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        val cb = activeNetworkCallback
+        val cm = activeConnectivityManager
+        activeNetworkCallback = null
+        activeConnectivityManager = null
+        if (cb != null && cm != null) {
+            try {
+                cm.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {}
         }
     }
 
@@ -835,6 +1050,8 @@ object CastMediaManager {
         overallTimeoutRunnable = null
         attemptTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         attemptTimeoutRunnable = null
+        wifiWaitFailFastRunnable?.let { mainHandler.removeCallbacks(it) }
+        wifiWaitFailFastRunnable = null
     }
 
     private fun cancelScheduledRunnables() {
@@ -845,6 +1062,10 @@ object CastMediaManager {
         pendingRetryRunnable = null
         activePollRunnable?.let { mainHandler.removeCallbacks(it) }
         activePollRunnable = null
+        suspensionTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        suspensionTimeoutRunnable = null
+        maxStreamingDurationRunnable?.let { mainHandler.removeCallbacks(it) }
+        maxStreamingDurationRunnable = null
     }
 
     private fun disconnectActiveClient(stopRemoteMedia: Boolean) {
@@ -922,6 +1143,7 @@ object CastMediaManager {
         mainHandler.post {
             try {
                 cancelScheduledRunnables()
+                unregisterNetworkCallback()
                 removeDiscoveryCallbacks(context)
                 if (hadActivity) {
                     AppLogger.i(LogCategory.CAST, TAG, "stopCast called: disconnecting Cast client and stopping HTTP server")

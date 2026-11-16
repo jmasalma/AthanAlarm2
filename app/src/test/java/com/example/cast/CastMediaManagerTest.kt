@@ -74,4 +74,39 @@ class CastMediaManagerTest {
         assertFalse(CastMediaManager.shouldTreatStatusAsCompleted(true, MediaStatus.PLAYER_STATE_IDLE, MediaStatus.IDLE_REASON_NONE))
         assertTrue(CastMediaManager.shouldTreatStatusAsCompleted(true, MediaStatus.PLAYER_STATE_IDLE, MediaStatus.IDLE_REASON_FINISHED))
     }
+
+    @Test
+    fun `shouldFailFastNoWifi fails immediately when Wi-Fi is disabled and no routes cached`() {
+        assertTrue(CastMediaManager.shouldFailFastNoWifi(wifiEnabled = false, hasWifiTransport = false, validRouteCount = 0, elapsedMs = 0L))
+        assertFalse(CastMediaManager.shouldFailFastNoWifi(wifiEnabled = false, hasWifiTransport = false, validRouteCount = 1, elapsedMs = 0L))
+    }
+
+    @Test
+    fun `shouldFailFastNoWifi waits until threshold when Wi-Fi is enabled but waking up`() {
+        assertFalse(CastMediaManager.shouldFailFastNoWifi(wifiEnabled = true, hasWifiTransport = false, validRouteCount = 0, elapsedMs = 500L))
+        assertTrue(
+            CastMediaManager.shouldFailFastNoWifi(
+                wifiEnabled = true,
+                hasWifiTransport = false,
+                validRouteCount = 0,
+                elapsedMs = CastMediaManager.WIFI_WAIT_FAIL_FAST_MS
+            )
+        )
+        assertFalse(
+            CastMediaManager.shouldFailFastNoWifi(
+                wifiEnabled = true,
+                hasWifiTransport = true,
+                validRouteCount = 0,
+                elapsedMs = CastMediaManager.WIFI_WAIT_FAIL_FAST_MS
+            )
+        )
+    }
+
+    @Test
+    fun `shouldAdjustVolume preserves audible non-muted speaker levels and only raises quiet or muted ones`() {
+        assertFalse(CastMediaManager.shouldAdjustVolume(hasVerifiedVolume = false, volume = 0.35, isMuted = false))
+        assertTrue(CastMediaManager.shouldAdjustVolume(hasVerifiedVolume = false, volume = 0.05, isMuted = false))
+        assertTrue(CastMediaManager.shouldAdjustVolume(hasVerifiedVolume = false, volume = 0.60, isMuted = true))
+        assertFalse(CastMediaManager.shouldAdjustVolume(hasVerifiedVolume = true, volume = 0.0, isMuted = true))
+    }
 }

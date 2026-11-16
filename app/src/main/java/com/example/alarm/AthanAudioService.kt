@@ -47,6 +47,7 @@ class AthanAudioService : Service() {
 
     private var isLocalAudioPlaying = false
     private var isCastPlayingOrPending = false
+    private var isAlarmStopped = false
     private var castingObserverJob: Job? = null
     private var currentPrayerType: PrayerType = PrayerType.FAJR
     private var screenWakeLock: PowerManager.WakeLock? = null
@@ -92,9 +93,14 @@ class AthanAudioService : Service() {
         }
 
         val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        @Suppress("DEPRECATION")
+        val wifiLockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
         wifiLock = wifiManager?.createWifiLock(
-            WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+            wifiLockMode,
             "AthanAlarm::CastWifiLock"
         )?.apply {
             setReferenceCounted(false)
@@ -121,6 +127,7 @@ class AthanAudioService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START_ALARM -> {
+                isAlarmStopped = false
                 val prayerName = intent?.getStringExtra(EXTRA_PRAYER) ?: PrayerType.FAJR.name
                 val modeName = intent?.getStringExtra(EXTRA_MODE) ?: AlarmMode.ATHAN.name
                 val soundChoice = intent?.getStringExtra(EXTRA_SOUND) ?: "adhan"
@@ -388,6 +395,8 @@ class AthanAudioService : Service() {
     }
 
     private fun stopAlarm() {
+        if (isAlarmStopped) return
+        isAlarmStopped = true
         isLocalAudioPlaying = false
         isCastPlayingOrPending = false
         castingObserverJob?.cancel()

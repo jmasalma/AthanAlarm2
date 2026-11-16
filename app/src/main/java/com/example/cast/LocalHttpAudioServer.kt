@@ -2,6 +2,7 @@ package com.example.cast
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import com.example.util.AppLogger
 import com.example.util.LogCategory
@@ -30,25 +31,89 @@ class LocalHttpAudioServer {
     companion object {
         private const val TAG = "LocalHttpAudioServer"
 
+        fun isWifiEnabled(context: Context): Boolean {
+            return try {
+                val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                wifiManager?.isWifiEnabled ?: true
+            } catch (_: Exception) {
+                true
+            }
+        }
+
+        fun hasWifiTransport(context: Context): Boolean {
+            return try {
+                val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    ?: return false
+                @Suppress("DEPRECATION")
+                cm.allNetworks.any { network ->
+                    val caps = cm.getNetworkCapabilities(network)
+                    caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+
         /**
          * Resolves the device's local Wi-Fi IPv4 address, prioritizing ConnectivityManager
-         * active network link addresses, then Wi-Fi interfaces over mobile cellular (rmnet/CGNAT).
+         * Wi-Fi transport networks (even if cellular or VPN is the default activeNetwork),
+         * then activeNetwork, WifiManager, and wlan network interfaces.
          */
         fun getLocalIpAddress(context: Context? = null): String {
-            // 1. Try ConnectivityManager active network first (zero permissions needed, 100% reliable)
+            var diagTransports = "none"
+            var wifiEnabledFlag: Boolean? = null
+
+            // 1. Check all ConnectivityManager networks with TRANSPORT_WIFI first
             if (context != null) {
                 try {
+                    wifiEnabledFlag = isWifiEnabled(context)
                     val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                    val activeNetwork = cm?.activeNetwork
-                    if (activeNetwork != null) {
-                        val linkProperties = cm.getLinkProperties(activeNetwork)
-                        for (linkAddress in linkProperties?.linkAddresses ?: emptyList()) {
-                            val addr = linkAddress.address
-                            if (addr is Inet4Address && !addr.isLoopbackAddress) {
-                                val host = addr.hostAddress
-                                if (!host.isNullOrBlank() && host != "127.0.0.1") {
-                                    AppLogger.i(LogCategory.SERVER, TAG, "Resolved local Wi-Fi IP via active network: $host")
-                                    return host
+                    if (cm != null) {
+                        @Suppress("DEPRECATION")
+                        val networks = cm.allNetworks
+                        val transportLabels = mutableListOf<String>()
+                        for (network in networks) {
+                            val caps = cm.getNetworkCapabilities(network)
+                            val label = buildString {
+                                if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) append("WIFI ")
+                                if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true) append("CELL ")
+                                if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) append("VPN ")
+                            }.trim()
+                            if (label.isNotEmpty()) transportLabels.add(label)
+
+                            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+                                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                            ) {
+                                val linkProperties = cm.getLinkProperties(network)
+                                for (linkAddress in linkProperties?.linkAddresses ?: emptyList()) {
+                                    val addr = linkAddress.address
+                                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                                        val host = addr.hostAddress
+                                        if (!host.isNullOrBlank() && host != "127.0.0.1") {
+                                            AppLogger.i(LogCategory.SERVER, TAG, "Resolved local Wi-Fi IP via TRANSPORT_WIFI: $host")
+                                            return host
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (transportLabels.isNotEmpty()) {
+                            diagTransports = transportLabels.joinToString(",")
+                        }
+
+                        // 2. Fallback to activeNetwork (excluding VPN/cellular-only if possible)
+                        val activeNetwork = cm.activeNetwork
+                        val activeCaps = if (activeNetwork != null) cm.getNetworkCapabilities(activeNetwork) else null
+                        if (activeNetwork != null && activeCaps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) != true) {
+                            val linkProperties = cm.getLinkProperties(activeNetwork)
+                            for (linkAddress in linkProperties?.linkAddresses ?: emptyList()) {
+                                val addr = linkAddress.address
+                                if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                                    val host = addr.hostAddress
+                                    if (!host.isNullOrBlank() && host != "127.0.0.1") {
+                                        AppLogger.i(LogCategory.SERVER, TAG, "Resolved local Wi-Fi IP via active network: $host")
+                                        return host
+                                    }
                                 }
                             }
                         }
@@ -58,7 +123,7 @@ class LocalHttpAudioServer {
                 }
             }
 
-            // 2. Try WifiManager
+            // 3. Try WifiManager
             if (context != null) {
                 try {
                     val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -83,7 +148,7 @@ class LocalHttpAudioServer {
                 }
             }
 
-            // 3. Iterate network interfaces, prioritizing wlan and eth
+            // 4. Iterate network interfaces, prioritizing wlan and eth
             try {
                 val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
                 val sortedInterfaces = interfaces.sortedByDescending {
@@ -119,7 +184,11 @@ class LocalHttpAudioServer {
                 AppLogger.e(LogCategory.SERVER, TAG, "Error resolving network interfaces: ${e.message}", e)
             }
 
-            AppLogger.w(LogCategory.SERVER, TAG, "Fallback to loopback 127.0.0.1 (No local Wi-Fi IP detected)")
+            AppLogger.w(
+                LogCategory.SERVER,
+                TAG,
+                "Fallback to loopback 127.0.0.1 (No local Wi-Fi IP detected; wifiEnabled=$wifiEnabledFlag, transports=[$diagTransports])"
+            )
             return "127.0.0.1"
         }
     }
